@@ -45,16 +45,19 @@ _COMMAND_DEFAULT = "This command could do anything you can do on this Mac."
 
 # Only these fields reach the model, and only when they look like plain identifiers. Each is
 # phrased as a sentence because small models reverse direction when given bare key=value pairs.
+_EMAIL = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,190}")
+_HOST = re.compile(r"[A-Za-z0-9.-]{1,190}")
+_ACCOUNT = re.compile(r"[A-Za-z0-9-]{1,34}")
+_MONEY = re.compile(r"\d{1,12}(?:\.\d{1,2})?")
 _MODEL_FACTS = {
-    "To": "It goes to {}.",
-    "Destination": "The data goes to {}.",
-    "To account": "The money goes to account {}.",
-    "Recipient": "It is shared with {}.",
-    "Account": "The account involved is {}.",
-    "Amount": "The amount is {}.",
-    "Amount usd": "The amount is ${}.",
+    "To": ("It goes to {}.", _EMAIL),
+    "Destination": ("The data goes to {}.", _HOST),
+    "To account": ("The money goes to account {}.", _ACCOUNT),
+    "Recipient": ("It is shared with {}.", _EMAIL),
+    "Account": ("The account involved is {}.", _ACCOUNT),
+    "Amount": ("The amount is {}.", _MONEY),
+    "Amount usd": ("The amount is ${}.", _MONEY),
 }
-_PLAIN_FACT = re.compile(r"[A-Za-z0-9@._:/$, -]{1,80}")
 _DATA_REASON = re.compile(r"^(Contains |This session has read )")
 
 _REASSURING_OR_ADVICE = re.compile(
@@ -67,6 +70,7 @@ _OVERSTATED_OR_REVERSED = re.compile(
     r"|operating system|from (?:your )?account)\b",
     re.I,
 )
+_SPELLED_AMOUNT = re.compile(r"\b(hundred|thousand|million|billion|dozen)s?\b", re.I)
 _NUMBER = re.compile(r"\d[\d,.]*")
 _ADDRESS = re.compile(r"[\w.-]+@[\w.-]+|\b[\w-]+(?:\.[\w-]+)*\.[a-z]{2,}\b", re.I)
 _INSTRUCTIONS = (
@@ -89,31 +93,46 @@ def fixed_worst_case(verdict: Verdict) -> str:
     return _FIXED.get(action, _GENERIC)
 
 
-def _model_input(verdict: Verdict, fixed: str) -> str:
-    facts = [f"An AI agent wants to {_action(verdict)}."]
-    facts += [f"{reason}." for reason in verdict.reasons if _DATA_REASON.match(reason)]
-    facts += [
-        _MODEL_FACTS[label].format(value)
-        for label, value in verdict.facts
-        if label in _MODEL_FACTS and _PLAIN_FACT.fullmatch(value)
-    ]
-    return f"Warning: {fixed}\nFacts: " + " ".join(facts)
+def _usable_facts(verdict: Verdict) -> dict[str, str]:
+    """Keep each allowed field once, and only when its value has exactly the expected shape."""
+    usable: dict[str, str] = {}
+    for label, value in verdict.facts:
+        if label in usable:
+            continue
+        if label in _MODEL_FACTS and _MODEL_FACTS[label][1].fullmatch(value):
+            usable[label] = value
+    return usable
+
+
+def _model_input(verdict: Verdict, fixed: str, facts: dict[str, str]) -> str:
+    lines = [f"An AI agent wants to {_action(verdict)}."]
+    lines += [f"{reason}." for reason in verdict.reasons if _DATA_REASON.match(reason)]
+    lines += [_MODEL_FACTS[label][0].format(value) for label, value in facts.items()]
+    return f"Warning: {fixed}\nFacts: " + " ".join(lines)
 
 
 def _digits(text: str) -> str:
     return text.replace(",", "").rstrip(".")
 
 
-def _acceptable(text: str, source: str) -> bool:
-    """Reject wording that plays down the risk, or that states anything the facts don't."""
+def _acceptable(text: str, facts: dict[str, str]) -> bool:
+    """Reject wording that plays down the risk, or that states anything the facts don't.
+
+    Numbers and addresses must equal a whole fact value: "98" is not in "9800".
+    """
     if not _MIN_CHARS <= len(text) <= _MAX_CHARS or "\n" in text:
         return False
-    if _REASSURING_OR_ADVICE.search(text) or _OVERSTATED_OR_REVERSED.search(text):
+    if (
+        _REASSURING_OR_ADVICE.search(text)
+        or _OVERSTATED_OR_REVERSED.search(text)
+        or _SPELLED_AMOUNT.search(text)
+    ):
         return False
-    known_digits = _digits(source)
-    if any(_digits(number) not in known_digits for number in _NUMBER.findall(text)):
-        return False
-    return all(address.lower() in source.lower() for address in _ADDRESS.findall(text))
+    known_numbers = {_digits(n) for value in facts.values() for n in _NUMBER.findall(value)}
+    known_addresses = {a.lower() for value in facts.values() for a in _ADDRESS.findall(value)}
+    return all(_digits(n) in known_numbers for n in _NUMBER.findall(text)) and all(
+        a.lower() in known_addresses for a in _ADDRESS.findall(text)
+    )
 
 
 async def _ask_model(prompt: str, settings: Settings, client: httpx.AsyncClient) -> str:
@@ -138,13 +157,14 @@ async def describe_worst_case(verdict: Verdict, settings: Settings, client: http
     fixed = fixed_worst_case(verdict)
     if not settings.worst_case_model:
         return fixed
-    prompt = _model_input(verdict, fixed)
+    facts = _usable_facts(verdict)
+    prompt = _model_input(verdict, fixed, facts)
     try:
         raw = await asyncio.wait_for(_ask_model(prompt, settings, client), MODEL_DEADLINE_SECONDS)
     except (TimeoutError, httpx.HTTPError, KeyError, IndexError, TypeError, ValueError):
         return fixed
     text = re.sub(r"^\s*warning:\s*", "", raw.strip(), flags=re.I).strip()
-    return display(text) if _acceptable(text, prompt) else fixed
+    return display(text) if _acceptable(text, facts) else fixed
 
 
 async def warm_up(settings: Settings, client: httpx.AsyncClient) -> None:

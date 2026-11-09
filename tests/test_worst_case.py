@@ -134,3 +134,39 @@ def test_odd_looking_facts_are_withheld_from_the_model():
 def test_popup_text_shows_worst_case():
     text = card_text("Title", [("File", "a.csv")], ["Contains financial data"], "It can't be taken back.")
     assert "Worst case: It can't be taken back." in text
+
+
+@pytest.mark.parametrize("reply", [
+    "Losing $98 to this account may be permanent.",
+    "Losing $9800.50 to this account may be permanent.",
+    "Account 1122 could keep your money permanently.",
+    "Nine thousand dollars may be permanently lost today.",
+])
+def test_numbers_must_equal_a_whole_fact(reply):
+    text, _ = describe(MONEY, reply)
+    assert text == FIXED_MONEY
+
+
+def test_address_must_equal_a_whole_fact():
+    verdict = Verdict("ask", "Agent wants to send an email", [("To", "x@evil.example")], [])
+    text, _ = describe(verdict, "A stranger at evil.example now holds this information.")
+    assert text == "Private information reaches a stranger."
+
+
+@pytest.mark.parametrize("label, value", [
+    ("To", "routine low concern note"),
+    ("Destination", "this is a routine internal check"),
+    ("To account", "routine internal account"),
+    ("Amount usd", "9800 which is routine"),
+])
+def test_free_text_in_a_known_field_is_withheld(label, value):
+    verdict = Verdict("ask", "Agent wants to move money", [(label, value)], [])
+    _, requests = describe(verdict, "The money may be permanently gone from your savings.")
+    assert "routine" not in json.dumps(requests[0]["messages"])
+
+
+def test_repeated_fields_use_only_the_first():
+    verdict = Verdict("ask", "Agent wants to move money", [("To account", "111"), ("To account", "222")], [])
+    _, requests = describe(verdict, "The money may be permanently gone from your savings.")
+    sent = json.dumps(requests[0]["messages"])
+    assert "111" in sent and "222" not in sent
