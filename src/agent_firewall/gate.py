@@ -225,7 +225,7 @@ def _review_bash(
     tool_input: dict, cwd: str, labels: set[str], settings: Settings, index: ScanIndex | None
 ) -> Review:
     command = tool_input.get("command")
-    if command in _READ_ONLY_GIT:
+    if isinstance(command, str) and command in _READ_ONLY_GIT:
         return Review(Verdict("allow"), display(command))
     search = _recursive_search(command)
     if search is not None and os.path.exists(_resolve(search["path"], cwd)):
@@ -248,8 +248,33 @@ def _review_bash(
     return Review(base, shown)
 
 
+def _is_firewall_file(path: str, settings: Settings) -> bool:
+    """True for the firewall's own log, rules or index, under any spelling or hard link."""
+    name = _folded(os.path.basename(path))
+    for own in (settings.audit_path, settings.policy_path, settings.index_path):
+        if not own:
+            continue
+        real = os.path.realpath(os.path.expanduser(own))
+        own_name = _folded(os.path.basename(real))
+        if name == own_name or name.startswith(own_name + "-"):
+            # Comparing the folder by identity covers aliases that realpath leaves unresolved.
+            if _same_file(os.path.dirname(path), os.path.dirname(real)):
+                return True
+        if any(_same_file(path, real + suffix) for suffix in ("", "-wal", "-shm", "-journal")):
+            return True
+    return False
+
+
+def _same_file(first: str, second: str) -> bool:
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return False
+
+
 def _review_write(tool: str, tool_input: dict, cwd: str, settings: Settings) -> Review:
-    raw_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+    # Each tool writes to one field only, so a decoy in the other can't redirect this check.
+    raw_path = str(tool_input.get("notebook_path" if tool == "NotebookEdit" else "file_path") or "")
     path = _resolve(raw_path, cwd)
     target = _shown_path(path, cwd)
     if any(canary in json.dumps(tool_input) for canary in settings.canaries):
@@ -259,8 +284,7 @@ def _review_write(tool: str, tool_input: dict, cwd: str, settings: Settings) -> 
             target,
         )
     # Folded because default macOS volumes treat .GIT and .git as the same directory.
-    firewall_files = {os.path.realpath(os.path.expanduser(p)) for p in (settings.audit_path, settings.policy_path) if p}
-    if _EXECUTABLE_CONFIG.search(_folded(path)) or path in firewall_files:
+    if _EXECUTABLE_CONFIG.search(_folded(path)) or _is_firewall_file(path, settings):
         return Review(
             Verdict("ask", "Claude Code wants to change settings that can run code", [("File", target)],
                     ["These settings can run commands or turn off this firewall"]),
@@ -281,7 +305,12 @@ def review_claude_code(
     """Decide one PreToolUse event. Tools not handled here fall through to the shared policy."""
     tool = str(payload.get("tool_name", ""))
     tool_input = payload.get("tool_input")
-    tool_input = tool_input if isinstance(tool_input, dict) else {}
+    if not isinstance(tool_input, dict):
+        return Review(
+            Verdict("block", "Blocked: unreadable action", [("Tool", display(tool))],
+                    ["The firewall could not parse this action"]),
+            display(tool),
+        )
     cwd = str(payload.get("cwd") or os.getcwd())
     settings = replace(settings, agent_workdir=os.path.realpath(cwd))
 

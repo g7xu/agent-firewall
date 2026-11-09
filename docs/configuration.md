@@ -16,7 +16,7 @@ Settings are read from `.env` in the directory where the firewall starts.
 | `ALLOWED_HOSTS` | No | empty | Hostnames agents may contact without asking. |
 | `KNOWN_RECIPIENTS` | No | empty | Email addresses agents may write to without asking. |
 | `CANARIES` | No | empty | Planted strings. A tool call containing one is blocked. |
-| `AUDIT_PATH` | No | `audit.jsonl` | Append-only event log, holding labels and hashes only. |
+| `AUDIT_PATH` | No | `audit.jsonl` | Append-only event log, readable only by your account. It never stores files, but Claude Code commands, searches, URLs and file names are logged in full, including anything typed into them. For other agents it keeps only hosts, recipient counts and plain file paths. |
 | `AGENT_WORKDIR` | No | empty | The agent's working directory on this machine. Set it to hold relative paths that symlinks carry outside it. |
 | `POPUP` | No | `mac` | `mac` shows a native dialog for Claude Code actions; any other value uses only the phone page. |
 | `WORST_CASE_MODEL` | No | empty | Local model that adds a specific, labeled sentence under the fixed worst-case warning, served from `LOCAL_BASE_URL`. It has 3 seconds to answer. Empty shows only the fixed sentence. |
