@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Firewall</title>
+<meta name="description" content="Agent Firewall pauses AI agents before they touch sensitive data, explains the worst case, and lets you decide.">
+<meta property="og:title" content="Agent Firewall">
+<meta property="og:description" content="Your AI agent stops at the line, and you decide what crosses it.">
+<style>
+  :root {
+    --night: #15112e;
+    --dusk: #1f1944;
+    --haze: #2d2660;
+    --text: #f4f0ff;
+    --muted: #b6afd8;
+    --local: #62e4b4;
+    --cloud: #92ccff;
+    --denied: #ff808b;
+    --sensitive: #ffcb5e;
+    --unsure: #cdaeff;
+    --display: "Avenir Next", Avenir, "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
+    --code: "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--night); scroll-behavior: smooth; }
+  body {
+    margin: 0; color: var(--text); font: 18px/1.55 var(--display);
+    background:
+      radial-gradient(60vw 620px at 0 0, rgba(98,228,180,.14), transparent 70%),
+      radial-gradient(60vw 620px at 100% 0, rgba(146,204,255,.16), transparent 70%),
+      var(--night);
+    background-repeat: no-repeat;
+  }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 28px; }
+
+  .top { display: flex; align-items: center; justify-content: space-between; padding: 24px 0; }
+  .brand { display: flex; align-items: center; gap: 12px; font-size: 21px; font-weight: 600; letter-spacing: -.01em; }
+  .mark { width: 4px; height: 26px; border-radius: 2px; background: linear-gradient(var(--local), var(--denied) 55%, var(--cloud)); }
+  .repo { font-weight: 500; text-underline-offset: 4px; }
+
+  h1 {
+    margin: 42px auto 18px; max-width: 15ch; text-align: center;
+    font-size: clamp(50px, 8.6vw, 112px); font-weight: 200; line-height: 1; letter-spacing: -.04em;
+  }
+  .lede { margin: 0 auto; max-width: 56ch; text-align: center; color: var(--muted); font-size: 21px; }
+
+  .gate { display: grid; grid-template-columns: minmax(170px, 1fr) minmax(0, 760px) minmax(170px, 1fr); align-items: center; margin: 54px 0 0; }
+  .shore { padding: 0 22px; }
+  .shore.right { text-align: right; }
+  .shore strong { display: block; font-size: 25px; font-weight: 500; letter-spacing: -.01em; line-height: 1.2; }
+  .shore span { display: block; margin-top: 6px; color: var(--muted); font-size: 15px; line-height: 1.4; }
+  .shore.left strong { color: var(--local); }
+  .shore.right strong { color: var(--cloud); }
+  .stage { position: relative; padding: 0 22px; }
+  .stage::before, .stage::after {
+    content: ""; position: absolute; top: -34px; bottom: -34px; width: 2px; border-radius: 2px;
+    background: linear-gradient(transparent, #fff 12%, #fff 88%, transparent);
+    box-shadow: 0 0 24px 3px rgba(205,174,255,.6);
+    transform-origin: top; animation: raise 1s cubic-bezier(.2,.8,.2,1) both;
+  }
+  .stage::before { left: 0; }
+  .stage::after { right: 0; }
+  @keyframes raise { from { transform: scaleY(0); opacity: 0; } to { transform: scaleY(1); opacity: 1; } }
+  .video { position: relative; aspect-ratio: 1108 / 831; border-radius: 12px; overflow: hidden; background: var(--dusk); }
+  .video iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .watch { margin: 56px 0 0; text-align: center; color: var(--muted); font-size: 16px; }
+
+  section { margin-top: 112px; }
+  h2 { margin: 0; font-size: clamp(34px, 4.6vw, 56px); font-weight: 300; line-height: 1.08; letter-spacing: -.03em; max-width: 19ch; }
+  .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 72px; align-items: center; }
+  .copy { color: var(--muted); max-width: 52ch; margin: 18px 0 0; }
+
+  .popup { background: #ece9f4; color: #1c1830; border-radius: 13px; padding: 22px 24px; box-shadow: 0 24px 70px rgba(0,0,0,.45); max-width: 480px; justify-self: end; font-size: 16px; }
+  .popup .ask { font-weight: 700; font-size: 18px; margin: 0 0 12px; }
+  .popup p { margin: 0 0 12px; }
+  .popup .worst { background: #fbe6e8; border-radius: 8px; padding: 10px 12px; font-weight: 600; }
+  .popup .warn { color: #7a4d00; font-weight: 600; font-size: 15px; margin-bottom: 4px; }
+  .choices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+  .choices span { background: #fff; border-radius: 7px; padding: 5px 13px; font-size: 15px; font-weight: 500; }
+  .choices .default { background: #5b4ee0; color: #fff; }
+
+  .ends { margin-top: 34px; border-top: 1px solid rgba(255,255,255,.12); }
+  .end { display: grid; grid-template-columns: minmax(180px, 300px) minmax(0, 1fr); gap: 26px; padding: 20px 0; border-bottom: 1px solid rgba(255,255,255,.12); align-items: baseline; }
+  .end strong { font-size: 26px; font-weight: 400; letter-spacing: -.015em; color: var(--tone); line-height: 1.2; }
+  .end span { color: var(--muted); }
+
+  .proof { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 56px; margin-top: 40px; }
+  .figure { font-size: clamp(60px, 8vw, 104px); font-weight: 200; line-height: 1; letter-spacing: -.04em; }
+  .figure.a { color: var(--local); }
+  .figure.b { color: var(--sensitive); }
+  .proof p { margin: 12px 0 0; max-width: 42ch; }
+  .proof small { display: block; margin-top: 8px; color: var(--muted); font-size: 15px; line-height: 1.45; }
+
+  .limits { margin: 26px 0 0; padding: 0; list-style: none; color: var(--muted); max-width: 66ch; }
+  .limits li { padding: 11px 0; border-bottom: 1px solid rgba(255,255,255,.1); }
+
+  pre { margin: 26px 0 0; padding: 20px 22px; background: var(--dusk); border-radius: 10px; overflow-x: auto; font: 15px/1.7 var(--code); }
+  .cta { display: inline-block; margin-top: 26px; border-radius: 9px; padding: 11px 22px; font-weight: 600; text-decoration: none; color: var(--night); background: linear-gradient(95deg, var(--local), var(--cloud)); }
+  footer { margin-top: 110px; padding: 28px 0 44px; color: var(--muted); font-size: 15px; border-top: 1px solid rgba(255,255,255,.1); }
+
+  @media (max-width: 980px) {
+    .gate { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 34px 0; }
+    .stage { grid-column: 1 / -1; grid-row: 1; padding: 0 12px; }
+    .stage::before, .stage::after { top: -20px; bottom: -20px; }
+    .shore { padding: 0; }
+    .split { grid-template-columns: minmax(0, 1fr); gap: 34px; }
+    .popup { justify-self: start; }
+  }
+  @media (max-width: 620px) {
+    body { font-size: 17px; }
+    .wrap { padding: 0 16px; }
+    .lede { font-size: 19px; }
+    h1 { margin-top: 18px; }
+    section { margin-top: 76px; }
+    .end { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+    .proof { grid-template-columns: minmax(0, 1fr); gap: 36px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; }
+    html { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><span class="mark" aria-hidden="true"></span>Agent Firewall</div>
+    <a class="repo" href="https://github.com/g7xu/agent-firewall">View on GitHub</a>
+  </header>
+
+  <main>
+    <h1>Your AI agent stops at the line.</h1>
+    <p class="lede">Agent Firewall pauses AI agents before they touch your money, health data or passwords, explains the worst that could happen, and lets you decide.</p>
+
+    <div class="gate">
+      <div class="shore left"><strong>On this device</strong><span>Your files stay with you</span></div>
+      <div class="stage">
+        <div class="video">
+          <iframe src="https://www.loom.com/embed/31e61c95dde245d3b9798748cb90eb2e" title="Agent Firewall demo video" allow="fullscreen; picture-in-picture" allowfullscreen></iframe>
+        </div>
+      </div>
+      <div class="shore right"><strong>Sent to the cloud</strong><span>Only what you let through</span></div>
+    </div>
+    <p class="watch">Video not loading? <a href="https://www.loom.com/share/31e61c95dde245d3b9798748cb90eb2e">Watch the demo on Loom</a></p>
+
+    <section class="split">
+      <div>
+        <h2>You see it before it happens.</h2>
+        <p class="copy">When Claude Code goes to open a sensitive file, the firewall reads the file on your Mac first and stops the action. You get one plain popup, and nothing moves until you answer. If you don't answer, the answer is no.</p>
+        <p class="copy">Keep on my Mac has a local AI read the file instead, so the cloud agent only receives a short summary.</p>
+      </div>
+      <div class="popup" role="img" aria-label="Example popup asking whether Claude Code may read transactions.csv">
+        <p class="ask">Claude Code wants to read a sensitive file</p>
+        <p>File: transactions.csv</p>
+        <p class="worst">Worst case: This data leaves your Mac and can't be taken back.</p>
+        <p class="warn">⚠ Contains financial data</p>
+        <p class="warn">⚠ Allowing sends this to Anthropic's cloud</p>
+        <div class="choices"><span class="default">Deny</span><span>Keep on my Mac</span><span>Allow</span></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>One dashboard for everything at the line.</h2>
+      <div class="ends">
+        <div class="end" style="--tone: var(--denied)"><strong>Denied</strong><span>Stopped by you or by a rule.</span></div>
+        <div class="end" style="--tone: var(--sensitive)"><strong>Sensitive</strong><span>Financial, health or identity data, and credentials.</span></div>
+        <div class="end" style="--tone: var(--unsure)"><strong>Unreadable or unsure</strong><span>Files or commands the firewall couldn't read or understand.</span></div>
+        <div class="end" style="--tone: var(--local)"><strong>On this device</strong><span>The file stayed on your Mac.</span></div>
+        <div class="end" style="--tone: var(--cloud)"><strong>Sent to the cloud</strong><span>Data you or the rules allowed through to a cloud AI model.</span></div>
+      </div>
+      <p class="copy">Click any category to see every item in it. Type your own rule, such as blocking anything that mentions a payment site, and it applies from the next action.</p>
+    </section>
+
+    <section>
+      <h2>It finds sensitive files on its own.</h2>
+      <p class="copy">A background scan checks your folders with no setup, all on your Mac. It reads text files, PDFs, Office documents, scanned pages and screenshots, and saves only labels and hashed file paths.</p>
+      <div class="proof">
+        <div>
+          <div class="figure a">350 of 350</div>
+          <p>Sensitive files found among 7,000 in 26 seconds.</p>
+          <small>Synthetic test files: text, images and scanned PDFs. Real folders will vary.</small>
+        </div>
+        <div>
+          <div class="figure b">16 to 1</div>
+          <p>Attacks that got out, with the firewall off and then on.</p>
+          <small>Scripted model that always obeys the attacker. The one miss is a paraphrased leak through an allowed site, kept in on purpose.</small>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>What it doesn't do yet.</h2>
+      <ul class="limits">
+        <li>It works on macOS, with Claude Code and agents that use an OpenAI-compatible API.</li>
+        <li>It can't see agents running on a vendor's own servers.</li>
+        <li>It recognizes sensitive data by patterns and file names, so a secret in a plainly named file can get through.</li>
+        <li>It's hackathon-stage software that raises the bar against mistakes and tricked agents. It isn't a complete security boundary.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Try it with fake data.</h2>
+      <pre><code>git clone https://github.com/g7xu/agent-firewall.git
+cd agent-firewall
+cp .env.example .env
+uv sync</code></pre>
+      <a class="cta" href="https://github.com/g7xu/agent-firewall/blob/main/docs/tutorial.md">Follow the tutorial</a>
+    </section>
+  </main>
+
+  <footer>Agent Firewall</footer>
+</div>
+</body>
+</html>
