@@ -31,13 +31,13 @@ uv run python -m demo.world
 uv run agent-firewall
 ```
 
-Scan the QR code with a phone on the same network, then run an attack:
+Scan the QR code with a phone on the same network, then run an attack that asks for approval:
 
 ```bash
-uv run python -m demo.agent --case A01
+uv run python -m demo.agent --case A05
 ```
 
-Add `--no-firewall` to see the same attack succeed.
+Add `--no-firewall` to see the same attack succeed. Case A01 shows a planted secret being blocked with no prompt, and B07 is a legitimate refund to approve.
 
 To protect a real agent, set the upstreams in `.env` and point the agent's OpenAI base URL at `http://127.0.0.1:8787/v1`. With Ollama, that means `LOCAL_BASE_URL=http://127.0.0.1:11434/v1` and a `LOCAL_MODEL` you have pulled.
 
