@@ -1,11 +1,13 @@
 import asyncio
 import json
+import os
 
 import httpx
 import pytest
 from fastapi import FastAPI
 
 from agent_firewall.config import Settings
+from agent_firewall.custom_policy import PolicyBook
 from agent_firewall.gate import review_claude_code, scan_path
 from agent_firewall.hook_api import create_hook_router
 from agent_firewall.store import Store
@@ -274,3 +276,107 @@ def test_firewall_log_and_rules_need_a_person_to_change(tmp_path):
     for name in ("policy.json", "audit.jsonl"):
         payload = event("Write", {"file_path": name, "content": "x"}, tmp_path)
         assert review_claude_code(payload, set(), config).verdict.decision == "ask"
+
+
+@pytest.mark.parametrize("name", ["POLICY.JSON", "Audit.Jsonl", "index.sqlite", "INDEX.SQLITE-wal"])
+def test_firewall_files_are_protected_under_any_capitalization(tmp_path, name):
+    config = settings(
+        tmp_path, policy_path=str(tmp_path / "policy.json"), audit_path=str(tmp_path / "audit.jsonl"),
+        index_path=str(tmp_path / "index.sqlite"),
+    )
+    payload = event("Write", {"file_path": name, "content": "x"}, tmp_path)
+    assert review_claude_code(payload, set(), config).verdict.decision == "ask"
+
+
+def test_hard_link_to_a_firewall_file_is_protected(tmp_path):
+    (tmp_path / "audit.jsonl").write_text("{}\n")
+    os.link(tmp_path / "audit.jsonl", tmp_path / "notes.md")
+    config = settings(tmp_path, audit_path=str(tmp_path / "audit.jsonl"))
+    payload = event("Write", {"file_path": "notes.md", "content": "x"}, tmp_path)
+    assert review_claude_code(payload, set(), config).verdict.decision == "ask"
+
+
+def hook_with_rule(tmp_path, rule, tool, tool_input):
+    """Return the card shown for an action, or the hook's reply if no card appears."""
+    config = settings(tmp_path)
+    store = Store(config)
+    book = PolicyBook()
+    book.add("ask", rule)
+    app = FastAPI()
+    app.include_router(create_hook_router(config, store, policy=book))
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+            call = asyncio.create_task(client.post("/hook/claude-code", json=event(tool, tool_input, tmp_path)))
+            while not store.pending() and not call.done():
+                await asyncio.sleep(0.01)
+            card = None
+            if store.pending():
+                item = store.pending()[0]
+                card = dict(item.facts)
+                store.decide(item.id, item.sha256, "deny")
+            return card, (await call).json()
+
+    return asyncio.run(scenario())
+
+
+def test_rule_popup_shows_the_full_action(tmp_path):
+    query = "watchword " + "x" * 900 + " the hidden end"
+    card, _ = hook_with_rule(tmp_path, "watchword", "WebSearch", {"query": query})
+    assert "the hidden end" in card["Details"]
+
+
+def test_rule_popup_too_long_to_show_is_blocked(tmp_path):
+    card, reply = hook_with_rule(tmp_path, "watchword", "WebSearch", {"query": "watchword " + "x" * 5000})
+    assert card is None
+    assert output(reply)["permissionDecision"] == "deny"
+
+
+def test_rule_on_an_existing_popup_also_shows_the_action(tmp_path):
+    (tmp_path / ".claude").mkdir()
+    tail = "the hidden end"
+    tool_input = {"file_path": ".claude/settings.json", "content": f"watchword {tail}"}
+    card, _ = hook_with_rule(tmp_path, "watchword", "Write", tool_input)
+    assert tail in card["Details"]
+
+
+def test_size_limit_counts_the_whole_card(tmp_path):
+    fields = {f"k{i}": "watchword" + "v" * 500 for i in range(20)}
+    card, reply = hook_with_rule(tmp_path, "watchword", "mcp__x__y", fields)
+    assert card is None and output(reply)["permissionDecision"] == "deny"
+
+
+def test_rule_popup_shows_a_symlink_destination(tmp_path):
+    (tmp_path / "watchword").mkdir()
+    (tmp_path / "watchword" / "plain.txt").write_text("hello")
+    (tmp_path / "link.txt").symlink_to(tmp_path / "watchword" / "plain.txt")
+    card, _ = hook_with_rule(tmp_path, "watchword", "Read", {"file_path": "link.txt"})
+    assert "watchword" in card["Target"]
+
+
+@pytest.mark.parametrize("tool_input", [["a"], "text", 5, None])
+def test_unreadable_tool_input_is_blocked(tmp_path, tool_input):
+    assert decide(tmp_path, "Bash", tool_input) == "block"
+
+
+def test_non_string_command_asks_instead_of_crashing(tmp_path):
+    assert decide(tmp_path, "Bash", {"command": ["git", "status"]}) == "ask"
+
+
+def test_notebook_edit_checks_the_field_it_writes(tmp_path):
+    config = settings(tmp_path, policy_path=str(tmp_path / "policy.json"))
+    tool_input = {"file_path": "README.md", "notebook_path": "policy.json", "new_source": "x"}
+    assert review_claude_code(event("NotebookEdit", tool_input, tmp_path), set(), config).verdict.decision == "ask"
+
+
+@pytest.mark.parametrize("suffix", ["-wal", "-shm"])
+def test_hard_link_to_an_index_side_file_is_protected(tmp_path, suffix):
+    state = tmp_path / "state"
+    state.mkdir()
+    project = tmp_path / "project"
+    project.mkdir()
+    (state / f"index.sqlite{suffix}").write_text("x")
+    os.link(state / f"index.sqlite{suffix}", project / "notes.md")
+    config = settings(tmp_path, index_path=str(state / "index.sqlite"))
+    assert review_claude_code(event("Write", {"file_path": "notes.md", "content": "x"}, project), set(), config).verdict.decision == "ask"

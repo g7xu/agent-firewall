@@ -281,8 +281,9 @@ def _review_network(name: str, args: dict, labels: set[str], settings: Settings)
 
 def _folded(text: str) -> str:
     """Spell `text` the way a case-insensitive filesystem would compare it, so `.ßh` reads `.ssh`."""
-    normalized = unicodedata.normalize("NFKC", text).casefold()
-    return "".join(char for char in normalized if unicodedata.category(char) not in ("Cc", "Cf"))
+    normalized = unicodedata.normalize("NFKC", unicodedata.normalize("NFKC", text).casefold())
+    visible = "".join(char for char in normalized if unicodedata.category(char) not in ("Cc", "Cf"))
+    return unicodedata.normalize("NFKC", visible)
 
 
 def _names_secret(text: str) -> bool:
@@ -431,9 +432,10 @@ def inspectable_text(value: Any) -> Iterator[str]:
                 except (ValueError, ArithmeticError, RecursionError):
                     pass
         elif isinstance(item, dict):
-            stack.extend((part, decodes) for pair in item.items() for part in pair)
+            # Reversed because the stack pops last-in: a rule on "git push" must see ["git", "push"] in order.
+            stack.extend((part, decodes) for pair in reversed(item.items()) for part in reversed(pair))
         elif isinstance(item, list):
-            stack.extend((part, decodes) for part in item)
+            stack.extend((part, decodes) for part in reversed(item))
         elif isinstance(item, (int, float, Decimal)) and not isinstance(item, bool):
             yield _plain_number(item)
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import tempfile
 import time
@@ -20,6 +21,9 @@ KINDS = ("idea", "ask", "block")
 MAX_ENTRIES = 300
 MAX_TEXT_CHARS = 500
 MIN_RULE_CHARS = 2
+# Default-ignorable characters that aren't Cc or Cf, so `_folded` would leave them in place.
+_INVISIBLE = re.compile("[\u034f\u17b4\u17b5\u180b-\u180f\u2065\ufe00-\ufe0f\ufff0-\ufff8\U000e0000-\U000e0fff]")
+_BLANK_FILLERS = re.compile("[\u115f\u1160\u2800\u3164\uffa0]")
 
 
 def searchable_text(*parts: object) -> str:
@@ -27,8 +31,15 @@ def searchable_text(*parts: object) -> str:
     return " ".join(piece for part in parts for piece in inspectable_text(part))
 
 
-def _normalized(text: str) -> str:
-    return " ".join(_folded(text).split())
+def _forms(text: str) -> tuple[str, str]:
+    """Return `text` with gaps kept as spaces, and with control characters simply deleted.
+
+    Both are needed: "git\\tpush" is two words to a shell, but "pay\\tpal.com" is one
+    hostname to a URL parser, because URL parsers discard tabs and newlines.
+    """
+    cleaned = _INVISIBLE.sub("", _BLANK_FILLERS.sub(" ", text)).replace("\\\n", " ")
+    spaced = " ".join(_folded(" ".join(cleaned.split())).split())
+    return spaced, " ".join(_folded(cleaned).split())
 
 
 class PolicyBook:
@@ -84,8 +95,11 @@ class PolicyBook:
 
     def match(self, haystack: str) -> dict | None:
         """Return the strictest rule whose text appears in `haystack`."""
-        normalized = _normalized(haystack)
-        hits = [e for e in self.entries if e["kind"] != "idea" and _normalized(e["text"]) in normalized]
+        forms = _forms(haystack)
+        hits = [
+            e for e in self.entries
+            if e["kind"] != "idea" and any(_forms(e["text"])[0] in form for form in forms)
+        ]
         return next((e for e in hits if e["kind"] == "block"), hits[0] if hits else None)
 
     def apply(self, verdict: Verdict, haystack: str, agent: str, facts: list[tuple[str, str]]) -> Verdict:
@@ -102,5 +116,8 @@ class PolicyBook:
             )
         if verdict.decision == "ask":
             verdict.reasons.insert(0, reason)
+            # The person must be able to see the text that matched.
+            shown = {label for label, _ in verdict.facts}
+            verdict.facts.extend(fact for fact in facts if fact[0] not in shown)
             return verdict
         return Verdict("ask", f"{agent} wants to do something your rule covers", facts, [reason])

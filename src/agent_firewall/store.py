@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import secrets
+import stat
 import time
 from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field
@@ -43,6 +45,8 @@ class Store:
         self.approvals: dict[str, Approval] = {}
         self.events: deque[dict] = deque(maxlen=RECENT_EVENT_LIMIT)
         self.counters: Counter[str] = Counter()
+        if not settings.audit_path or Path(settings.audit_path).is_dir():
+            raise ValueError("AUDIT_PATH must name a file")
         self._audit_path = Path(settings.audit_path)
 
     def add_labels(self, session: str, labels: set[str]) -> set[str]:
@@ -51,10 +55,13 @@ class Store:
         return set(self.session_labels[session])
 
     def record(self, kind: str, **fields) -> None:
-        """Log an event. Callers pass labels, names and hashes, never content."""
+        """Log an event. Callers pass names, labels and hashes rather than file or message contents."""
         event = {"ts": round(time.time(), 3), "kind": kind, **fields}
         self.events.append(event)
-        with self._audit_path.open("a") as handle:
+        descriptor = os.open(self._audit_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        if stat.S_ISREG(os.fstat(descriptor).st_mode):
+            os.fchmod(descriptor, 0o600)  # Also repairs a log created or loosened by something else.
+        with os.fdopen(descriptor, "a") as handle:
             handle.write(json.dumps(event) + "\n")
 
     def create_approval(

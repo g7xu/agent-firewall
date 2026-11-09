@@ -18,7 +18,7 @@ from .config import Settings
 from .custom_policy import PolicyBook, searchable_text
 from .gate import Review, review_claude_code
 from .local_summary import summarize
-from .policy import display
+from .policy import MAX_REVIEWABLE_CHARS, Verdict, display
 from .popup import ask_on_mac, card_text
 from .scan_index import ScanIndex
 from .scanner import Scanner
@@ -93,8 +93,18 @@ def create_hook_router(
         )
         if policy:
             haystack = searchable_text(tool, payload.get("tool_input"), review.target)
-            facts = [("Tool", display(tool)), ("Target", display(review.target))]
+            facts = [
+                ("Tool", display(tool)), ("Target", display(review.target)),
+                ("Details", display(payload.get("tool_input"))),
+            ]
             review.verdict = policy.apply(review.verdict, haystack, "Claude Code", facts)
+            if review.verdict.decision == "ask" and sum(
+                len(label) + len(value) for label, value in review.verdict.facts
+            ) > MAX_REVIEWABLE_CHARS:
+                review.verdict = Verdict(
+                    "block", "Blocked: action too long to show in full", [("Tool", display(tool))],
+                    ["This action is too long to review on a popup"],
+                )
         verdict = review.verdict
         sha256 = hashlib.sha256(
             json.dumps({"tool": tool, "input": payload.get("tool_input")}, sort_keys=True).encode()

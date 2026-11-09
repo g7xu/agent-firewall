@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import FastAPI, Request
@@ -23,6 +25,9 @@ from .worst_case import ai_worst_case, fixed_worst_case
 
 UPSTREAM_TIMEOUT_SECONDS = 300.0
 SESSION_HEADER = "x-afw-session"
+_PLAIN_HOST = re.compile(r"[A-Za-z0-9.-]{1,253}")
+_PLAIN_LOG_PATH = re.compile(r"[A-Za-z0-9_./-]{1,400}")
+_SAFE_LOG_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
 # Request fields the firewall understands. A request using any other is kept off the cloud.
 REQUEST_FIELDS = {
     "model", "messages", "tools", "tool_choice", "parallel_tool_calls", "stream", "stream_options",
@@ -102,6 +107,32 @@ def _reviewed_call(call: dict) -> dict:
     return kept
 
 
+def _log_safe_name(name: str) -> str:
+    return name if _SAFE_LOG_NAME.fullmatch(name) else "unknown tool"
+
+
+def _log_target(name: str, facts: dict[str, str]) -> str:
+    """Describe an action for the log with no URL details, query text or email addresses.
+
+    Allow-listed shapes only, since anything else in these fields can hold a credential.
+    """
+    if "Destination" in facts:
+        destination = facts["Destination"]
+        try:
+            host = urlsplit(destination).hostname if "://" in destination else destination
+        except ValueError:
+            host = None
+        unclear = not host or "@" in destination or "\\" in destination or not _PLAIN_HOST.fullmatch(host)
+        return "unclear destination" if unclear else host
+    if "To" in facts:
+        recipients = [part for part in facts["To"].split(",") if part.strip()]
+        count = 0 if facts["To"] == "(no recipient)" else len(recipients)
+        return f"{count} recipient{'' if count == 1 else 's'}"
+    if "File" in facts:
+        return facts["File"] if _PLAIN_LOG_PATH.fullmatch(facts["File"]) else "unclear file"
+    return _log_safe_name(name)
+
+
 def _as_sse(data: dict) -> StreamingResponse:
     """Replay a finished completion as SSE: tool calls cannot be reviewed mid-stream."""
 
@@ -170,17 +201,18 @@ def create_proxy_app(
                 verdict, searchable_text(name, raw_arguments), "Agent",
                 [("Tool", display(name)), ("Details", display(raw_arguments))],
             )
-            if verdict.decision == "ask" and any(len(value) > MAX_REVIEWABLE_CHARS for _, value in verdict.facts):
+            if verdict.decision == "ask" and sum(
+                len(label) + len(value) for label, value in verdict.facts
+            ) > MAX_REVIEWABLE_CHARS:
                 verdict = Verdict(
                     "block", "Blocked: action too long to show in full", [("Tool", display(name))],
                     ["This action is too long to review on a popup"],
                 )
-        shown = dict(verdict.facts)
-        target = shown.get("Destination") or shown.get("To") or shown.get("File") or name
+        target = _log_target(name, dict(verdict.facts))
         labels = sorted(classify(raw_arguments, settings.canaries))
         store.counters[f"tool_{verdict.decision}"] += 1
         store.record(
-            "tool", session=session, tool=name, decision=verdict.decision, sha256=sha256,
+            "tool", session=session, tool=_log_safe_name(name), decision=verdict.decision, sha256=sha256,
             target=target, labels=labels, reasons=verdict.reasons,
         )
 
@@ -200,7 +232,7 @@ def create_proxy_app(
         status = await store.wait(approval)
         store.counters[f"approval_{status}"] += 1
         store.record(
-            "approval", session=session, tool=name, status=status, sha256=sha256,
+            "approval", session=session, tool=_log_safe_name(name), status=status, sha256=sha256,
             target=target, labels=labels, reasons=verdict.reasons,
         )
         return None if status == "approved" else f"{verdict.title} ({status})"
@@ -272,6 +304,8 @@ def create_proxy_app(
             return JSONResponse({"error": {"message": "messages required"}}, status_code=400)
 
         session = request.headers.get(SESSION_HEADER, "default")
+        if not _SAFE_LOG_NAME.fullmatch(session):
+            session = hashlib.sha256(session.encode()).hexdigest()[:16]
         labels = _request_labels(body, settings.canaries)
         session_labels = store.add_labels(session, labels)
 

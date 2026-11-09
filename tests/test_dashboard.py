@@ -240,3 +240,31 @@ def test_concurrent_saves_leave_a_valid_file(tmp_path):
     assert len(json.loads((tmp_path / "policy.json").read_text())) == 20
     assert (tmp_path / "policy.json").stat().st_mode & 0o077 == 0
     assert [p.name for p in tmp_path.iterdir()] == ["policy.json"]
+
+
+@pytest.mark.parametrize("gap", ["\t", "\n", "\r\n", "  ", " "])
+def test_rules_treat_every_kind_of_gap_as_a_space(gap):
+    assert applied(book_with("ask", "git push"), ALLOW, f"git{gap}push origin").decision == ASK
+
+
+@pytest.mark.parametrize("gap", ["\t", "\n", "\r\n"])
+def test_rules_catch_control_characters_inside_a_url(gap):
+    assert applied(book_with("block", "paypal.com"), ALLOW, f"https://pay{gap}pal.com/x").decision == BLOCK
+
+
+@pytest.mark.parametrize("hidden", ["͏", "️", "︀", "᠋", "\U000e0100", "⁥"])
+def test_rules_see_through_other_invisible_characters(hidden):
+    assert applied(book_with("block", "paypal.com"), ALLOW, f"pay{hidden}pal.com").decision == BLOCK
+
+
+@pytest.mark.parametrize("filler", ["ㅤ", "ﾠ", "ᅟ", "⠀"])
+def test_blank_looking_characters_count_as_a_gap(filler):
+    assert applied(book_with("ask", "git push"), ALLOW, f"git{filler}push").decision == ASK
+
+
+def test_shell_line_continuation_counts_as_a_gap():
+    assert applied(book_with("ask", "git push"), ALLOW, "git \\\n push origin").decision == ASK
+
+
+def test_argv_style_lists_match_in_order():
+    assert applied(book_with("block", "git push"), ALLOW, searchable_text({"argv": ["git", "push", "origin"]})).decision == BLOCK
