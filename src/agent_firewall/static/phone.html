@@ -16,6 +16,7 @@
   .label { color:var(--muted); font-size:13px; }
   .value { word-break:break-word; }
   .reason { color:var(--warn); margin:12px 0 0; font-weight:600; }
+  .worst { background:#3a2326; border-radius:10px; padding:12px; margin-top:14px; font-weight:600; }
   .timer { color:var(--muted); font-size:13px; margin-top:12px; }
   .buttons { display:flex; gap:12px; margin-top:18px; }
   button { flex:1; border:0; border-radius:12px; padding:16px; font:600 17px system-ui; color:#fff; touch-action:none; }
@@ -64,6 +65,11 @@ function buildCard(item) {
     const fact = el("div", "fact");
     fact.append(el("div", "label", label), el("div", "value", value));
     card.append(fact);
+  }
+  if (item.worst_case) {
+    const worst = el("div", "worst");
+    worst.append(el("div", "label", "Worst case"), el("div", "value", item.worst_case));
+    card.append(worst);
   }
   for (const reason of item.reasons) card.append(el("div", "reason", "⚠ " + reason));
   const timer = el("div", "timer");

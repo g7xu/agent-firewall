@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .config import Settings
-from .policy import Verdict, _names_secret, classify, display, review_tool_call
+from .policy import Verdict, _folded, _names_secret, classify, display, review_tool_call
 
 MAX_SCAN_BYTES = 5_000_000
 MAX_SCAN_FILES = 500
@@ -172,7 +172,8 @@ def _review_write(tool: str, tool_input: dict, cwd: str, settings: Settings) -> 
                     [("File", target)], ["A planted secret appeared in this action"]),
             target,
         )
-    if _EXECUTABLE_CONFIG.search(path):
+    # Folded because default macOS volumes treat .GIT and .git as the same directory.
+    if _EXECUTABLE_CONFIG.search(_folded(path)):
         return Review(
             Verdict("ask", "Claude Code wants to change settings that can run code", [("File", target)],
                     ["These settings can run commands or turn off this firewall"]),

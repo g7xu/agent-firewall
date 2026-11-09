@@ -15,9 +15,11 @@ end run"""
 _DECISIONS = {"Allow": "approve", "Deny": "deny", "Keep on my Mac": "keep_local"}
 
 
-def card_text(title: str, facts: list[tuple[str, str]], reasons: list[str]) -> str:
-    lines = [title, ""] + [f"{label}: {value}" for label, value in facts]
-    return "\n".join(lines + [""] + [f"⚠ {reason}" for reason in reasons])
+def card_text(title: str, facts: list[tuple[str, str]], reasons: list[str], worst_case: str = "") -> str:
+    lines = [title, ""] + [f"{label}: {value}" for label, value in facts] + [""]
+    if worst_case:
+        lines += [f"Worst case: {worst_case}", ""]
+    return "\n".join(lines + [f"⚠ {reason}" for reason in reasons])
 
 
 async def ask_on_mac(text: str, timeout_seconds: int, can_keep_local: bool) -> str | None:

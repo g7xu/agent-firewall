@@ -18,6 +18,7 @@ from .gate import Review, review_claude_code
 from .local_summary import summarize
 from .popup import ask_on_mac, card_text
 from .store import Approval, Store
+from .worst_case import describe_worst_case
 
 AGENT = "claude-code"
 SUMMARY_TIMEOUT_SECONDS = 200.0
@@ -40,7 +41,7 @@ def create_hook_router(
         popup = None
         if settings.popup == "mac":
             async def ask() -> None:
-                text = card_text(approval.title, approval.facts, approval.reasons)
+                text = card_text(approval.title, approval.facts, approval.reasons, approval.worst_case)
                 timeout = int(settings.approval_timeout_seconds)
                 decision = await ask_on_mac(text, timeout, approval.can_keep_local)
                 if decision:
@@ -90,6 +91,7 @@ def create_hook_router(
         approval = store.create_approval(
             session, tool, verdict.title, verdict.facts, verdict.reasons, sha256,
             can_keep_local=review.keep_local_path is not None,
+            worst_case=await describe_worst_case(verdict, settings, client),
         )
         status = await wait_for_human(approval)
         store.counters[f"approval_{status}"] += 1

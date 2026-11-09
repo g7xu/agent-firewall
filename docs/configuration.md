@@ -18,3 +18,5 @@ Settings are read from `.env` in the directory where the firewall starts.
 | `CANARIES` | No | empty | Planted strings. A tool call containing one is blocked. |
 | `AUDIT_PATH` | No | `audit.jsonl` | Append-only event log, holding labels and hashes only. |
 | `AGENT_WORKDIR` | No | empty | The agent's working directory on this machine. Set it to hold relative paths that symlinks carry outside it. |
+| `POPUP` | No | `mac` | `mac` shows a native dialog for Claude Code actions; any other value uses only the phone page. |
+| `WORST_CASE_MODEL` | No | empty | Local model that makes the worst-case sentence specific, served from `LOCAL_BASE_URL`. Empty uses the fixed sentences. |

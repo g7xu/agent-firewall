@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from .config import Settings
 from .policy import classify, inspectable_text, preview, review_tool_call
 from .store import Store
+from .worst_case import describe_worst_case
 
 UPSTREAM_TIMEOUT_SECONDS = 300.0
 SESSION_HEADER = "x-afw-session"
@@ -174,7 +175,8 @@ def create_proxy_app(
         if agent_says:
             facts.append(("Agent says", preview(agent_says)))
         approval = store.create_approval(
-            session, name, verdict.title, facts, verdict.reasons, sha256
+            session, name, verdict.title, facts, verdict.reasons, sha256,
+            worst_case=await describe_worst_case(verdict, settings, client),
         )
         status = await store.wait(approval)
         store.counters[f"approval_{status}"] += 1

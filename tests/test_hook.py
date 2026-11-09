@@ -242,3 +242,8 @@ def test_writes_to_code_running_config_ask(tmp_path, path):
 
 def test_similar_names_are_not_config(tmp_path):
     assert decide(tmp_path, "Write", {"file_path": "src/github.py", "content": "x"}) == "allow"
+
+
+@pytest.mark.parametrize("path", [".GIT/config", ".Git/hooks/pre-commit", ".CLAUDE/settings.json", ".ENVRC", ".GitAttributes"])
+def test_config_check_ignores_case_like_macos_does(tmp_path, path):
+    assert decide(tmp_path, "Write", {"file_path": path, "content": "x"}) == "ask"

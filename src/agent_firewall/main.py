@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import socket
 
+import httpx
 import segno
 import uvicorn
 
@@ -11,6 +12,9 @@ from .hook_api import create_hook_router
 from .phone import create_phone_app
 from .proxy import create_proxy_app
 from .store import Store
+from .worst_case import warm_up
+
+WARM_UP_TIMEOUT_SECONDS = 60.0
 
 
 def lan_address() -> str:
@@ -33,7 +37,8 @@ async def serve(settings: Settings, store: Store, log_level: str = "warning") ->
     phone = uvicorn.Server(uvicorn.Config(
         create_phone_app(settings, store), host="0.0.0.0", port=settings.phone_port, log_level=log_level,
     ))
-    await asyncio.gather(proxy.serve(), phone.serve())
+    async with httpx.AsyncClient(timeout=WARM_UP_TIMEOUT_SECONDS) as client:
+        await asyncio.gather(proxy.serve(), phone.serve(), warm_up(settings, client))
 
 
 def main() -> None:

@@ -29,6 +29,7 @@ class Settings:
     audit_path: str = "audit.jsonl"
     agent_workdir: str = ""
     popup: str = "off"
+    worst_case_model: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -51,4 +52,5 @@ class Settings:
             audit_path=os.environ.get("AUDIT_PATH", cls.audit_path),
             agent_workdir=os.environ.get("AGENT_WORKDIR", ""),
             popup=os.environ.get("POPUP", "mac"),
+            worst_case_model=os.environ.get("WORST_CASE_MODEL", ""),
         )

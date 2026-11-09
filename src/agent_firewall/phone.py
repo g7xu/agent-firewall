@@ -48,7 +48,7 @@ def create_phone_app(settings: Settings, store: Store) -> FastAPI:
             {
                 "id": a.id, "title": a.title, "facts": a.facts, "reasons": a.reasons,
                 "sha256": a.sha256, "seconds_left": max(0, round(a.expires_at - now)),
-                "can_keep_local": a.can_keep_local,
+                "can_keep_local": a.can_keep_local, "worst_case": a.worst_case,
             }
             for a in store.pending()
         ]
