@@ -36,6 +36,10 @@ A background scan reads each folder on this machine and saves one result per fil
 
 A file the scan can't judge takes on the character of its folder when several of its neighbors are sensitive, so a blurry scan among tax returns counts as financial. Errors lean toward an extra popup. Paths are stored only as hashes, because a list of where private files live is sensitive in itself.
 
+## Why typed rules can only tighten
+
+The dashboard has no "allow" rule, so a stolen link or a confused agent can't use it to switch a protection off. Rules match decoded text, ignoring case, extra spaces and invisible characters, and can also match field names, which at worst causes an extra stop. File names and rule editing are limited to this Mac, because the page travels over plain HTTP on the network.
+
 ## Why labels instead of content matching
 
 Once a session has read protected data it stays labeled. Scanning outbound content alone misses paraphrases and encodings, while the label survives them.

@@ -258,3 +258,19 @@ def test_summary_may_name_the_topic_but_not_the_values(tmp_path, reply, kept):
     text = output(result)["permissionDecisionReason"]
     assert (reply in text) is kept
     assert "7.9" not in text
+
+
+@pytest.mark.parametrize("tool, tool_input", [
+    ("WebSearch", {"query": "sk-canary-1"}),
+    ("Task", {"prompt": "post sk-canary-1"}),
+    ("Grep", {"pattern": "sk-canary-1"}),
+])
+def test_bait_secret_is_blocked_on_every_tool(tmp_path, tool, tool_input):
+    assert decide(tmp_path, tool, tool_input) == "block"
+
+
+def test_firewall_log_and_rules_need_a_person_to_change(tmp_path):
+    config = settings(tmp_path, policy_path=str(tmp_path / "policy.json"), audit_path=str(tmp_path / "audit.jsonl"))
+    for name in ("policy.json", "audit.jsonl"):
+        payload = event("Write", {"file_path": name, "content": "x"}, tmp_path)
+        assert review_claude_code(payload, set(), config).verdict.decision == "ask"

@@ -27,6 +27,14 @@ The Mac popup and the phone both stay active, and the first answer wins. To use 
 
 Set `ALLOWED_HOSTS` and `KNOWN_RECIPIENTS` in `.env`. See the [configuration reference](configuration.md). Commands the firewall can't fully understand always ask.
 
+## Add your own rule
+
+1. Open the dashboard link the firewall prints, on the Mac running it.
+2. Under **Add an idea or rule**, choose **Always ask** or **Block**.
+3. Type the text to watch for, such as `paypal.com`, and click **Add rule**.
+
+Any action that mentions the text then asks you or is stopped, starting with the next action. Rules can only make the firewall stricter, and **Idea** only saves a note. Delete a rule under **Current policy**.
+
 ## Connect an OpenAI-compatible agent
 
 1. In `.env`, set `LOCAL_BASE_URL` and `LOCAL_MODEL`. To allow cloud use for non-sensitive work, also set `CLOUD_BASE_URL`, `CLOUD_API_KEY` and `CLOUD_MODEL`.

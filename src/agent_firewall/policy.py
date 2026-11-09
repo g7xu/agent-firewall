@@ -251,11 +251,19 @@ def _unambiguous_host(url: Any) -> str | None:
     return parts.hostname.lower()
 
 
+def _is_firewall_itself(url: Any, settings: Settings) -> bool:
+    """True for the firewall's own ports, which allow-listing localhost must not open to agents."""
+    parts = urlsplit(url)
+    return parts.hostname in ("127.0.0.1", "localhost", "::1") and parts.port in (
+        settings.proxy_port, settings.phone_port,
+    )
+
+
 def _review_network(name: str, args: dict, labels: set[str], settings: Settings) -> Verdict:
     url = args.get("url")
     host = _unambiguous_host(url)
     extras = _extra_field_facts(args, _NETWORK_FIELDS)
-    host_allowed = host in {h.lower() for h in settings.allowed_hosts}
+    host_allowed = host in {h.lower() for h in settings.allowed_hosts} and not _is_firewall_itself(url, settings)
     plain_payload = all(isinstance(args[key], str) for key in ("data", "body") if key in args)
     if host_allowed and not extras and plain_payload:
         return Verdict("allow")

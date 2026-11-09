@@ -8,6 +8,7 @@ import segno
 import uvicorn
 
 from .config import Settings
+from .custom_policy import PolicyBook
 from .hook_api import create_hook_router
 from .phone import create_phone_app
 from .proxy import create_proxy_app
@@ -35,13 +36,15 @@ async def serve(settings: Settings, store: Store, log_level: str = "warning") ->
     scanner = Scanner(settings, index) if index else None
     if scanner:
         scanner.start()
-    proxy_app = create_proxy_app(settings, store)
-    proxy_app.include_router(create_hook_router(settings, store, index=index, scanner=scanner))
+    policy = PolicyBook(settings.policy_path)
+    proxy_app = create_proxy_app(settings, store, policy=policy)
+    proxy_app.include_router(create_hook_router(settings, store, index=index, scanner=scanner, policy=policy))
     proxy = uvicorn.Server(uvicorn.Config(
-        proxy_app, host="127.0.0.1", port=settings.proxy_port, log_level=log_level,
+        proxy_app, host="127.0.0.1", port=settings.proxy_port, log_level=log_level, proxy_headers=False,
     ))
     phone = uvicorn.Server(uvicorn.Config(
-        create_phone_app(settings, store, scanner), host="0.0.0.0", port=settings.phone_port, log_level=log_level,
+        create_phone_app(settings, store, scanner, policy), host="0.0.0.0", port=settings.phone_port,
+        log_level=log_level, proxy_headers=False,
     ))
     async with httpx.AsyncClient(timeout=WARM_UP_TIMEOUT_SECONDS) as client:
         await asyncio.gather(proxy.serve(), phone.serve(), warm_up(settings, client))

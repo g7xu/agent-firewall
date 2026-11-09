@@ -333,3 +333,22 @@ def test_symlink_in_a_folder_is_never_clean(tmp_path):
     scan = scan_folder(str(project), SETTINGS, index_at(tmp_path))
     assert scan.clean == [str(project.resolve() / "real.md")]
     assert scan.unreadable == 1
+
+
+def test_flagged_list_keeps_known_files_at_the_cap(tmp_path, monkeypatch):
+    from agent_firewall.inspector import Inspection
+    monkeypatch.setattr("agent_firewall.scanner.MAX_FLAGGED_FILES", 2)
+    scanner = Scanner(SETTINGS, index_at(tmp_path))
+    hit = Inspection({"financial"}, "text")
+    for name in ("a", "b", "a", "c"):
+        scanner._remember(Path(name), hit)
+    assert sorted(item[0] for item in scanner.flagged_files()) == ["a", "b"]
+
+
+def test_flagged_file_keeps_its_first_seen_time(tmp_path):
+    from agent_firewall.inspector import Inspection
+    scanner = Scanner(SETTINGS, index_at(tmp_path))
+    scanner._remember(Path("a"), Inspection({"financial"}, "text"))
+    first = scanner.flagged_files()[0][3]
+    scanner._remember(Path("a"), Inspection({"financial"}, "text"))
+    assert scanner.flagged_files()[0][3] == first

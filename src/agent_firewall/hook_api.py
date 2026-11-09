@@ -15,8 +15,10 @@ from fastapi import APIRouter, Body
 
 from .clean_search import run_clean_search
 from .config import Settings
+from .custom_policy import PolicyBook, searchable_text
 from .gate import Review, review_claude_code
 from .local_summary import summarize
+from .policy import display
 from .popup import ask_on_mac, card_text
 from .scan_index import ScanIndex
 from .scanner import Scanner
@@ -36,7 +38,7 @@ def _decision(permission: str, reason: str) -> dict:
 
 def create_hook_router(
     settings: Settings, store: Store, transport: httpx.AsyncBaseTransport | None = None,
-    index: ScanIndex | None = None, scanner: Scanner | None = None,
+    index: ScanIndex | None = None, scanner: Scanner | None = None, policy: PolicyBook | None = None,
 ) -> APIRouter:
     router = APIRouter()
     client = httpx.AsyncClient(timeout=SUMMARY_TIMEOUT_SECONDS, transport=transport)
@@ -89,6 +91,10 @@ def create_hook_router(
         review = await asyncio.to_thread(
             review_claude_code, payload, set(store.session_labels[session]), settings, index
         )
+        if policy:
+            haystack = searchable_text(tool, payload.get("tool_input"), review.target)
+            facts = [("Tool", display(tool)), ("Target", display(review.target))]
+            review.verdict = policy.apply(review.verdict, haystack, "Claude Code", facts)
         verdict = review.verdict
         sha256 = hashlib.sha256(
             json.dumps({"tool": tool, "input": payload.get("tool_input")}, sort_keys=True).encode()
@@ -99,6 +105,7 @@ def create_hook_router(
             store.record(
                 "tool", agent=AGENT, session=session, tool=tool, target=review.target,
                 decision=decision, decided_by=decided_by, labels=sorted(review.labels), sha256=sha256,
+                reasons=verdict.reasons,
             )
 
         if verdict.decision == "allow":
@@ -119,7 +126,7 @@ def create_hook_router(
         store.counters[f"approval_{status}"] += 1
         store.record(
             "approval", agent=AGENT, session=session, tool=tool, target=review.target,
-            status=status, sha256=sha256,
+            status=status, sha256=sha256, labels=sorted(review.labels), reasons=verdict.reasons,
         )
         if status == "approved":
             store.add_labels(session, review.labels)

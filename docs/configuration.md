@@ -22,3 +22,4 @@ Settings are read from `.env` in the directory where the firewall starts.
 | `WORST_CASE_MODEL` | No | empty | Local model that adds a specific, labeled sentence under the fixed worst-case warning, served from `LOCAL_BASE_URL`. It has 3 seconds to answer. Empty shows only the fixed sentence. |
 | `SCAN_ROOTS` | No | `~/Documents,~/Desktop,~/Downloads` | Folders scanned in the background. Each project an agent works in is added automatically. Empty scans only those projects. |
 | `INDEX_PATH` | No | `~/.agent-firewall/index.sqlite` | Saved scan results, holding hashed paths and labels only. Empty turns off the background scan. |
+| `POLICY_PATH` | No | `~/.agent-firewall/policy.json` | Ideas and rules typed into the dashboard. Empty keeps them in memory until restart. |
