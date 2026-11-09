@@ -17,3 +17,4 @@ Settings are read from `.env` in the directory where the firewall starts.
 | `KNOWN_RECIPIENTS` | No | empty | Email addresses agents may write to without asking. |
 | `CANARIES` | No | empty | Planted strings. A tool call containing one is blocked. |
 | `AUDIT_PATH` | No | `audit.jsonl` | Append-only event log, holding labels and hashes only. |
+| `AGENT_WORKDIR` | No | empty | The agent's working directory on this machine. Set it to hold relative paths that symlinks carry outside it. |

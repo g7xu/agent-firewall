@@ -48,13 +48,14 @@ def create_phone_app(settings: Settings, store: Store) -> FastAPI:
             {
                 "id": a.id, "title": a.title, "facts": a.facts, "reasons": a.reasons,
                 "sha256": a.sha256, "seconds_left": max(0, round(a.expires_at - now)),
+                "can_keep_local": a.can_keep_local,
             }
             for a in store.pending()
         ]
 
     @app.post("/api/decide", dependencies=[Depends(require_token)])
     def decide(decision: Decision) -> dict:
-        if decision.decision not in ("approve", "deny"):
+        if decision.decision not in ("approve", "deny", "keep_local"):
             raise HTTPException(status_code=400, detail="bad decision")
         result = store.decide(decision.id, decision.sha256, decision.decision)
         if result != "ok":

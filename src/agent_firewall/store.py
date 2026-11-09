@@ -29,6 +29,7 @@ class Approval:
     reasons: list[str]
     sha256: str
     expires_at: float
+    can_keep_local: bool = False
     status: str = "pending"
     event: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -56,12 +57,13 @@ class Store:
 
     def create_approval(
         self, session: str, tool: str, title: str, facts: list[tuple[str, str]],
-        reasons: list[str], sha256: str,
+        reasons: list[str], sha256: str, can_keep_local: bool = False,
     ) -> Approval:
         approval = Approval(
             id=f"apr_{secrets.token_hex(6)}",
             session=session, tool=tool, title=title, facts=facts, reasons=reasons, sha256=sha256,
             expires_at=time.time() + self.settings.approval_timeout_seconds,
+            can_keep_local=can_keep_local,
         )
         self.approvals[approval.id] = approval
         return approval
@@ -85,7 +87,7 @@ class Store:
     def decide(self, approval_id: str, sha256: str, decision: str) -> str:
         """Apply a phone decision to the exact request the phone was shown.
 
-        Returns "ok", "not_found", "hash_mismatch", "already_decided" or "expired".
+        Returns "ok", "not_found", "hash_mismatch", "already_decided", "not_offered" or "expired".
         """
         approval = self.approvals.get(approval_id)
         if approval is None:
@@ -98,6 +100,8 @@ class Store:
             approval.status = "expired"
             approval.event.set()
             return "expired"
-        approval.status = "approved" if decision == "approve" else "denied"
+        if decision == "keep_local" and not approval.can_keep_local:
+            return "not_offered"
+        approval.status = {"approve": "approved", "keep_local": "kept_local"}.get(decision, "denied")
         approval.event.set()
         return "ok"

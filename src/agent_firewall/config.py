@@ -27,6 +27,8 @@ class Settings:
     known_recipients: tuple[str, ...] = ()
     canaries: tuple[str, ...] = ()
     audit_path: str = "audit.jsonl"
+    agent_workdir: str = ""
+    popup: str = "off"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -47,4 +49,6 @@ class Settings:
             known_recipients=_csv("KNOWN_RECIPIENTS"),
             canaries=_csv("CANARIES"),
             audit_path=os.environ.get("AUDIT_PATH", cls.audit_path),
+            agent_workdir=os.environ.get("AGENT_WORKDIR", ""),
+            popup=os.environ.get("POPUP", "mac"),
         )

@@ -20,6 +20,7 @@
   .buttons { display:flex; gap:12px; margin-top:18px; }
   button { flex:1; border:0; border-radius:12px; padding:16px; font:600 17px system-ui; color:#fff; touch-action:none; }
   .deny { background:var(--deny); }
+  .keep { background:#2f6fdb; }
   .approve { background:#39424f; position:relative; overflow:hidden; }
   .approve span { position:relative; }
   .approve i { position:absolute; inset:0; width:0; background:var(--ok); }
@@ -81,7 +82,13 @@ function buildCard(item) {
     hold = setTimeout(() => decide(item, "approve", card), HOLD_MS);
   };
   approve.onpointerup = approve.onpointerleave = approve.onpointercancel = release;
-  buttons.append(deny, approve);
+  buttons.append(deny);
+  if (item.can_keep_local) {
+    const keep = el("button", "keep", "Keep on my Mac");
+    keep.onclick = () => decide(item, "keep_local", card);
+    buttons.append(keep);
+  }
+  buttons.append(approve);
   card.append(buttons);
   return card;
 }

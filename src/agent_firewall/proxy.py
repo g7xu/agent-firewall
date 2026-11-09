@@ -16,32 +16,62 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .config import Settings
-from .policy import classify, display, review_tool_call
+from .policy import classify, inspectable_text, preview, review_tool_call
 from .store import Store
 
 UPSTREAM_TIMEOUT_SECONDS = 300.0
 SESSION_HEADER = "x-afw-session"
+# Request fields the firewall understands. A request using any other is kept off the cloud.
+REQUEST_FIELDS = {
+    "model", "messages", "tools", "tool_choice", "parallel_tool_calls", "stream", "stream_options",
+    "temperature", "top_p", "n", "stop", "max_tokens", "max_completion_tokens", "presence_penalty",
+    "frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "seed", "user", "metadata",
+    "response_format", "functions", "function_call", "store", "service_tier", "reasoning_effort",
+    "modalities", "audio", "prediction",
+}
+REQUEST_MESSAGE_FIELDS = {
+    "role", "content", "name", "tool_calls", "tool_call_id", "function_call", "refusal", "audio",
+    "reasoning", "reasoning_content",
+}
+REQUEST_TEXT_PART_FIELDS = {"type", "text", "cache_control"}
+# Fields that describe tools rather than hold conversation data.
+REQUEST_SCHEMA_FIELDS = {"tools", "tool_choice", "response_format", "functions"}
+
+# Reply fields that reach the agent. Anything else could carry an action nobody reviewed.
+REPLY_FIELDS = {"id", "object", "created", "model", "choices", "usage", "system_fingerprint", "service_tier"}
+REPLY_CHOICE_FIELDS = {"index", "message", "finish_reason"}
+REPLY_MESSAGE_FIELDS = {"role", "content", "tool_calls", "refusal"}
+REPLY_TEXT_FIELDS = ("role", "content", "refusal")
+REPLY_CALL_FIELDS = {"id", "type", "function"}
+REPLY_FUNCTION_FIELDS = {"name", "arguments"}
+# Field names outside the reviewed shape that signal an attempted action rather than metadata.
+REPLY_ACTION_FIELDS = {"tool_calls", "function_call", "delta", "message", "output", "tool_use"}
 
 
-def _scannable_text(messages: list[dict]) -> tuple[str, bool]:
-    """Return all inspectable text, plus whether any part could not be inspected."""
-    parts: list[str] = []
-    opaque = False
-    for message in messages:
-        content = message.get("content")
-        if isinstance(content, str):
-            parts.append(content)
-        elif isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and part.get("type") in ("text", "input_text"):
-                    parts.append(str(part.get("text", "")))
-                else:
-                    opaque = True
-        elif content is not None:
-            opaque = True
-        for call in message.get("tool_calls") or []:
-            parts.append(str((call.get("function") or {}).get("arguments", "")))
-    return "\n".join(parts), opaque
+def _message_is_opaque(message: Any) -> bool:
+    if not isinstance(message, dict) or set(message) - REQUEST_MESSAGE_FIELDS:
+        return True
+    content = message.get("content")
+    if isinstance(content, list):
+        return not all(
+            isinstance(part, dict)
+            and part.get("type") in ("text", "input_text")
+            and isinstance(part.get("text"), str)
+            and not set(part) - REQUEST_TEXT_PART_FIELDS
+            for part in content
+        )
+    return not (content is None or isinstance(content, str))
+
+
+def _request_labels(body: dict, canaries: tuple[str, ...]) -> set[str]:
+    """Label everything that would be forwarded, so no field is both unscanned and sent."""
+    schemas = [value for key, value in body.items() if key in REQUEST_SCHEMA_FIELDS]
+    conversation = {key: value for key, value in body.items() if key not in REQUEST_SCHEMA_FIELDS}
+    labels = classify("\n".join(inspectable_text(conversation)), canaries)
+    labels |= classify("\n".join(inspectable_text(schemas)), canaries, exact_only=True)
+    if set(body) - REQUEST_FIELDS or any(_message_is_opaque(m) for m in body["messages"]):
+        labels.add("opaque")
+    return labels
 
 
 def _request_hash(session: str, name: str, raw_arguments: str) -> str:
@@ -50,6 +80,24 @@ def _request_hash(session: str, name: str, raw_arguments: str) -> str:
         sort_keys=True, separators=(",", ":"),
     )
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _strip_unreviewed(container: dict, allowed: set[str]) -> bool:
+    """Drop every field outside `allowed`; True when a dropped one was carrying an action."""
+    carried_action = False
+    for key in set(container) - allowed:
+        carried_action |= key in REPLY_ACTION_FIELDS and bool(container[key])
+        del container[key]
+    return carried_action
+
+
+def _reviewed_call(call: dict) -> dict:
+    """Reduce an approved tool call to the fields its review covered."""
+    kept = {key: value for key, value in call.items() if key in REPLY_CALL_FIELDS}
+    kept["function"] = {
+        key: value for key, value in call["function"].items() if key in REPLY_FUNCTION_FIELDS
+    }
+    return kept
 
 
 def _as_sse(data: dict) -> StreamingResponse:
@@ -66,6 +114,8 @@ def _as_sse(data: dict) -> StreamingResponse:
         for choice in data.get("choices", []):
             message = choice.get("message") or {}
             delta: dict[str, Any] = {"role": "assistant", "content": message.get("content") or ""}
+            if message.get("refusal"):
+                delta["refusal"] = message["refusal"]
             if message.get("tool_calls"):
                 delta["tool_calls"] = [
                     {**call, "index": i} for i, call in enumerate(message["tool_calls"])
@@ -89,7 +139,9 @@ def create_proxy_app(
         base_url = settings.cloud_base_url if is_cloud else settings.local_base_url
         model = (settings.cloud_model if is_cloud else settings.local_model) or body.get("model")
         payload = {**body, "model": model, "stream": False}
-        payload.pop("stream_options", None)
+        # The legacy function-calling parameters would invite replies outside the tool_calls review.
+        for key in ("stream_options", "functions", "function_call"):
+            payload.pop(key, None)
         headers = {}
         if is_cloud and settings.cloud_api_key:
             headers["Authorization"] = f"Bearer {settings.cloud_api_key}"
@@ -98,7 +150,8 @@ def create_proxy_app(
     async def review_call(session: str, call: dict, agent_says: str) -> str | None:
         """Return None to keep the tool call, or a human-readable reason it was stopped."""
         function = call.get("function") if isinstance(call, dict) else None
-        if not isinstance(function, dict) or not isinstance(function.get("name"), str):
+        is_function = isinstance(call, dict) and call.get("type", "function") == "function"
+        if not is_function or not isinstance(function, dict) or not isinstance(function.get("name"), str):
             store.record("tool", session=session, decision="block", why="malformed")
             store.counters["tool_block"] += 1
             return "a malformed action"
@@ -119,7 +172,7 @@ def create_proxy_app(
 
         facts = list(verdict.facts)
         if agent_says:
-            facts.append(("Agent says", display(agent_says)))
+            facts.append(("Agent says", preview(agent_says)))
         approval = store.create_approval(
             session, name, verdict.title, facts, verdict.reasons, sha256
         )
@@ -128,21 +181,53 @@ def create_proxy_app(
         store.record("approval", session=session, tool=name, status=status, sha256=sha256)
         return None if status == "approved" else f"{verdict.title} ({status})"
 
-    async def review_choices(data: dict, session: str) -> None:
-        for choice in data.get("choices", []):
-            message = choice.get("message") or {}
+    def record_block(session: str, why: str) -> None:
+        store.record("tool", session=session, decision="block", why=why)
+        store.counters["tool_block"] += 1
+
+    async def review_reply(data: dict, session: str) -> None:
+        """Reduce `data` in place to the shape the review covers, then review what is left."""
+        unreviewed_at_top = _strip_unreviewed(data, REPLY_FIELDS)
+        choices = data.get("choices")
+        choices = [c for c in choices if isinstance(c, dict)] if isinstance(choices, list) else []
+        if unreviewed_at_top and not choices:
+            choices = [{"index": 0, "finish_reason": "stop"}]
+        data["choices"] = choices
+
+        for position, choice in enumerate(choices):
+            stopped: list[str] = []
+            misplaced = _strip_unreviewed(choice, REPLY_CHOICE_FIELDS) or (unreviewed_at_top and position == 0)
+            message = choice.get("message")
+            if not isinstance(message, dict):
+                misplaced = misplaced or bool(message)
+                message = choice["message"] = {"role": "assistant", "content": None}
+            misplaced = _strip_unreviewed(message, REPLY_MESSAGE_FIELDS) or misplaced
+            if misplaced:
+                record_block(session, "misplaced_action")
+                stopped.append("an action in an unsupported format")
+
+            unreadable = [k for k in REPLY_TEXT_FIELDS if not isinstance(message.get(k), (str, type(None)))]
+            if unreadable:
+                for key in unreadable:
+                    del message[key]
+                message.setdefault("role", "assistant")
+                record_block(session, "non_text_reply")
+                stopped.append("a reply the firewall could not read")
+
             calls = message.get("tool_calls")
-            if not calls:
-                continue
-            outcomes = await asyncio.gather(
-                *(review_call(session, call, message.get("content") or "") for call in calls)
-            )
-            kept = [call for call, stopped in zip(calls, outcomes) if stopped is None]
-            stopped = [reason for reason in outcomes if reason is not None]
-            if kept:
-                message["tool_calls"] = kept
-            else:
-                message.pop("tool_calls", None)
+            if calls and not isinstance(calls, list):
+                calls = [calls]
+            if calls:
+                outcomes = await asyncio.gather(
+                    *(review_call(session, call, message.get("content") or "") for call in calls)
+                )
+                kept = [_reviewed_call(call) for call, reason in zip(calls, outcomes) if reason is None]
+                stopped += [reason for reason in outcomes if reason is not None]
+                if kept:
+                    message["tool_calls"] = kept
+                else:
+                    message.pop("tool_calls", None)
+            if stopped and not message.get("tool_calls"):
                 choice["finish_reason"] = "stop"
             if stopped:
                 notice = "Agent Firewall stopped: " + "; ".join(stopped) + ". Do not retry this action."
@@ -163,8 +248,7 @@ def create_proxy_app(
             return JSONResponse({"error": {"message": "messages required"}}, status_code=400)
 
         session = request.headers.get(SESSION_HEADER, "default")
-        text, opaque = _scannable_text(body["messages"])
-        labels = classify(text, settings.canaries) | ({"opaque"} if opaque else set())
+        labels = _request_labels(body, settings.canaries)
         session_labels = store.add_labels(session, labels)
 
         if session_labels:
@@ -200,7 +284,7 @@ def create_proxy_app(
             )
 
         data = upstream.json()
-        await review_choices(data, session)
+        await review_reply(data, session)
         if body.get("stream"):
             return _as_sse(data)
         return JSONResponse(data, headers={"x-afw-route": route})

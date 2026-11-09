@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:8787/hook/claude-code",
+            "timeout": 300,
+            "onFailure": "block"
+          }
+        ]
+      }
+    ]
+  }
+}
