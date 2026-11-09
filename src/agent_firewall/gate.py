@@ -31,7 +31,11 @@ _EXECUTABLE_CONFIG = re.compile(
 _NO_DATA_TOOLS = {
     "Glob", "LS", "TodoWrite", "ToolSearch", "Task", "Agent", "TaskOutput",
     "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "EnterPlanMode", "ExitPlanMode",
-    "AskUserQuestion",
+    "AskUserQuestion", "Skill",
+    # The Claude desktop app's own interface tools: task list, recap, panes and chapter markers.
+    "mcp__ccd_turn__update_plan", "mcp__ccd_turn__wrap_up", "mcp__ccd_view__show_pane",
+    "mcp__ccd_view__close_pane", "mcp__ccd_view__get_layout", "mcp__ccd_view__set_transcript_view",
+    "mcp__ccd_session__mark_chapter",
 }
 _SHELL_EXPANSION = re.compile(r"[*?\[\]{}~]")
 _SEARCH_FLAGS = {"grep": set("rnilHEIcw"), "rg": set("nilHcw")}
