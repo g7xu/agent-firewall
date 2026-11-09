@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Firewall Dashboard</title>
+<style>
+  :root { --bg:#0f1115; --card:#1a1e26; --text:#f2f4f8; --muted:#9aa3b2; --local:#2ecc71; --cloud:#4da3ff; --bad:#ff5a5f; --warn:#ffb020; }
+  body { margin:0; padding:24px 16px; background:var(--bg); color:var(--text); font:15px/1.4 -apple-system,system-ui,sans-serif; }
+  h1 { font-size:22px; margin:0 0 16px; }
+  #tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:12px; margin-bottom:20px; }
+  .tile { background:var(--card); border-radius:12px; padding:14px; }
+  .num { font-size:30px; font-weight:700; }
+  .label { color:var(--muted); font-size:13px; }
+  .row { display:grid; grid-template-columns:70px 90px 1fr; gap:8px; padding:9px 0; border-bottom:1px solid #2a303b; }
+  .time { color:var(--muted); }
+  .why { word-break:break-word; }
+</style>
+</head>
+<body>
+<h1>Where the agent ran, and why</h1>
+<div id="tiles"></div>
+<div id="events"></div>
+<script>
+const token = new URLSearchParams(location.search).get("t") || "";
+const TILES = [
+  ["route_local", "Stayed on device"], ["route_cloud", "Went to cloud"],
+  ["tool_allow", "Actions allowed"], ["tool_ask", "Asked you"],
+  ["tool_block", "Blocked outright"], ["approval_denied", "You denied"],
+];
+const COLORS = { local:"var(--local)", cloud:"var(--cloud)", block:"var(--bad)", denied:"var(--bad)", expired:"var(--bad)", ask:"var(--warn)", approved:"var(--local)", allow:"var(--muted)" };
+
+function el(tag, className, text, color) {
+  const node = document.createElement(tag);
+  node.className = className;
+  node.textContent = text;
+  if (color) node.style.color = color;
+  return node;
+}
+
+function describe(event) {
+  if (event.kind === "route") return [event.route, event.why];
+  if (event.kind === "tool") return [event.decision, event.tool || event.why || ""];
+  return [event.status, event.tool || ""];
+}
+
+async function refresh() {
+  let data;
+  try { data = await (await fetch(`/api/stats?t=${encodeURIComponent(token)}`)).json(); } catch { return; }
+  const tiles = document.getElementById("tiles");
+  tiles.replaceChildren(...TILES.map(([key, label]) => {
+    const tile = el("div", "tile", "");
+    tile.append(el("div", "num", String(data.counters[key] || 0)), el("div", "label", label));
+    return tile;
+  }));
+  const events = document.getElementById("events");
+  events.replaceChildren(...data.events.map((event) => {
+    const [state, why] = describe(event);
+    const row = el("div", "row", "");
+    row.append(
+      el("div", "time", new Date(event.ts * 1000).toLocaleTimeString([], { hour12:false })),
+      el("div", "", state, COLORS[state]),
+      el("div", "why", why),
+    );
+    return row;
+  }));
+}
+
+refresh();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>

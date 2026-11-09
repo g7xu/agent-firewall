@@ -1,0 +1,4 @@
+FAKE BANK - Monthly summary (synthetic data for testing)
+Account number: ACCT-00458812
+Holder: Alex Example
+Statement balance: $42,118.07

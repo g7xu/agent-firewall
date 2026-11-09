@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Firewall</title>
+<style>
+  :root { --bg:#0f1115; --card:#1a1e26; --text:#f2f4f8; --muted:#9aa3b2; --warn:#ffb020; --deny:#ff5a5f; --ok:#2ecc71; }
+  * { box-sizing:border-box; -webkit-user-select:none; user-select:none; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--text); font:17px/1.4 -apple-system,system-ui,sans-serif; }
+  h1 { font-size:15px; color:var(--muted); font-weight:600; margin:0 0 16px; }
+  .idle { color:var(--muted); text-align:center; margin-top:35vh; }
+  .card { background:var(--card); border-radius:16px; padding:20px; margin-bottom:16px; }
+  .title { font-size:22px; font-weight:700; margin-bottom:14px; }
+  .fact { margin-bottom:10px; }
+  .label { color:var(--muted); font-size:13px; }
+  .value { word-break:break-word; }
+  .reason { color:var(--warn); margin:12px 0 0; font-weight:600; }
+  .timer { color:var(--muted); font-size:13px; margin-top:12px; }
+  .buttons { display:flex; gap:12px; margin-top:18px; }
+  button { flex:1; border:0; border-radius:12px; padding:16px; font:600 17px system-ui; color:#fff; touch-action:none; }
+  .deny { background:var(--deny); }
+  .approve { background:#39424f; position:relative; overflow:hidden; }
+  .approve span { position:relative; }
+  .approve i { position:absolute; inset:0; width:0; background:var(--ok); }
+  .approve.holding i { width:100%; transition:width .8s linear; }
+</style>
+</head>
+<body>
+<h1>Agent Firewall</h1>
+<div id="cards"></div>
+<div id="idle" class="idle">Nothing needs you right now.</div>
+<script>
+const HOLD_MS = 800;
+const token = new URLSearchParams(location.search).get("t") || "";
+const api = (path) => `${path}?t=${encodeURIComponent(token)}`;
+const cards = document.getElementById("cards");
+const idle = document.getElementById("idle");
+const rendered = new Map();
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  // textContent only: every displayed field can be attacker-controlled.
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+async function decide(item, decision, card) {
+  card.style.opacity = "0.4";
+  await fetch(api("/api/decide"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: item.id, sha256: item.sha256, decision }),
+  });
+  poll();
+}
+
+function buildCard(item) {
+  const card = el("div", "card");
+  card.append(el("div", "title", item.title));
+  for (const [label, value] of item.facts) {
+    const fact = el("div", "fact");
+    fact.append(el("div", "label", label), el("div", "value", value));
+    card.append(fact);
+  }
+  for (const reason of item.reasons) card.append(el("div", "reason", "⚠ " + reason));
+  const timer = el("div", "timer");
+  card.append(timer);
+  card.timer = timer;
+
+  const buttons = el("div", "buttons");
+  const deny = el("button", "deny", "Deny");
+  deny.onclick = () => decide(item, "deny", card);
+  const approve = el("button", "approve");
+  approve.append(el("i"), el("span", "", "Hold to approve"));
+  let hold;
+  const release = () => { clearTimeout(hold); approve.classList.remove("holding"); };
+  approve.onpointerdown = () => {
+    approve.classList.add("holding");
+    hold = setTimeout(() => decide(item, "approve", card), HOLD_MS);
+  };
+  approve.onpointerup = approve.onpointerleave = approve.onpointercancel = release;
+  buttons.append(deny, approve);
+  card.append(buttons);
+  return card;
+}
+
+async function poll() {
+  let items;
+  try {
+    const response = await fetch(api("/api/pending"));
+    if (!response.ok) return;
+    items = await response.json();
+  } catch { return; }
+  const live = new Set(items.map((item) => item.id));
+  for (const [id, card] of rendered) {
+    if (!live.has(id)) { card.remove(); rendered.delete(id); }
+  }
+  for (const item of items) {
+    if (!rendered.has(item.id)) {
+      const card = buildCard(item);
+      rendered.set(item.id, card);
+      cards.append(card);
+      if (navigator.vibrate) navigator.vibrate(200);
+    }
+    rendered.get(item.id).timer.textContent = `Denied automatically in ${item.seconds_left}s`;
+  }
+  idle.style.display = items.length ? "none" : "block";
+}
+
+poll();
+setInterval(poll, 1000);
+</script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+FAKE CLINIC - Patient note (synthetic data for testing)
+MRN-7731902, Alex Example
+Lab results: A1C 7.9
+Prescribed: metformin 500 mg
