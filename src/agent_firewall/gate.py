@@ -9,14 +9,18 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from .clean_search import CleanSearch
 from .config import Settings
-from .policy import Verdict, _folded, _names_secret, classify, display, review_tool_call
+from .inspector import inspect_file
+from .policy import Verdict, _folded, _names_secret, display, review_tool_call
+from .scan_index import ScanIndex
 
-MAX_SCAN_BYTES = 5_000_000
 MAX_SCAN_FILES = 500
+MAX_WALK_FILES = 200_000
 _SKIP_DIRS = {".git", ".venv", "node_modules", "__pycache__"}
 # Writes here need a person: `.git/config` alone can make the auto-allowed `git status` run a command.
 _EXECUTABLE_CONFIG = re.compile(
@@ -29,6 +33,8 @@ _NO_DATA_TOOLS = {
     "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "EnterPlanMode", "ExitPlanMode",
     "AskUserQuestion",
 }
+_SHELL_EXPANSION = re.compile(r"[*?\[\]{}~]")
+_SEARCH_FLAGS = {"grep": set("rnilHEIcw"), "rg": set("nilHcw")}
 _READ_ONLY_GIT = {"git status", "git status --short", "git branch", "git log --oneline"}
 _FILE_READING_COMMANDS = {"cat", "head", "tail", "grep", "wc"}
 _WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
@@ -38,6 +44,8 @@ _LABEL_REASONS = {
     "canary": "Contains a planted secret",
     "opaque": "The firewall can't inspect this",
     "credentials": "Contains files that can hold passwords or keys",
+    "identity": "Looks like an identity document",
+    "inferred": "Sits in a folder of sensitive files",
 }
 CLOUD_WARNING = "Allowing sends this to Anthropic's cloud"
 
@@ -48,39 +56,57 @@ class Review:
     target: str = ""
     labels: set[str] = field(default_factory=set)
     keep_local_path: str | None = None
+    clean_search: CleanSearch | None = None
 
 
-def _scan_file(path: Path, settings: Settings) -> set[str]:
-    try:
-        if path.stat().st_size > MAX_SCAN_BYTES:
-            return {"opaque"}
-        raw = path.read_bytes()
-    except OSError:
-        return {"opaque"}
-    if b"\x00" in raw:
-        return {"opaque"}
-    try:
-        return classify(raw.decode("utf-8"), settings.canaries)
-    except UnicodeDecodeError:
-        return {"opaque"}
+@dataclass
+class FolderScan:
+    labels: set[str] = field(default_factory=set)
+    total: int = 0
+    sensitive: int = 0
+    unreadable: int = 0
+    clean: list[str] = field(default_factory=list)
 
 
-def scan_path(path: str, settings: Settings) -> set[str]:
-    """Return labels for a file or directory; a directory too big to finish counts as opaque."""
+def scan_folder(path: str, settings: Settings, index: ScanIndex | None = None) -> FolderScan:
+    """Check a file or directory, reading at most MAX_SCAN_FILES files that have no saved result."""
     target = Path(os.path.realpath(path))
+    scan = FolderScan()
+
+    def record(file: Path, labels: set[str]) -> None:
+        scan.total += 1
+        scan.labels |= labels
+        if labels - {"opaque"}:
+            scan.sensitive += 1
+        elif labels:
+            scan.unreadable += 1
+        else:
+            scan.clean.append(str(file))
+
     if target.is_file():
-        return _scan_file(target, settings)
-    labels: set[str] = set()
-    scanned = 0
+        record(target, inspect_file(target, settings, index).labels)
+        return scan
+    read_now = 0
     for root, dirs, files in os.walk(target):
         dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
         for name in files:
-            scanned += 1
-            if scanned > MAX_SCAN_FILES:
-                return labels | {"opaque"}
-            # Keys and tokens rarely match the data patterns, so the file name has to count.
-            labels |= {"credentials"} if _names_secret(name) else _scan_file(Path(root, name), settings)
-    return labels
+            if scan.total >= MAX_WALK_FILES:
+                scan.labels.add("opaque")
+                return scan
+            file = Path(root, name)
+            if _names_secret(name):
+                # Keys and tokens rarely match the data patterns, so the file name has to count.
+                record(file, {"credentials"})
+                continue
+            found = inspect_file(file, settings, index, allow_live=read_now < MAX_SCAN_FILES)
+            read_now += 1 if found is not None and found.was_live else 0
+            record(file, found.labels if found is not None else {"opaque"})
+    return scan
+
+
+def scan_path(path: str, settings: Settings, index: ScanIndex | None = None) -> set[str]:
+    """Return labels for a file or directory; a directory too big to finish counts as opaque."""
+    return scan_folder(path, settings, index).labels
 
 
 def _resolve(path: str, cwd: str) -> str:
@@ -111,14 +137,16 @@ def _sensitive_read(path: str, cwd: str, found: set[str], prior: list[str]) -> V
     )
 
 
-def _review_read(tool_input: dict, cwd: str, labels: set[str], settings: Settings) -> Review:
+def _review_read(
+    tool_input: dict, cwd: str, labels: set[str], settings: Settings, index: ScanIndex | None
+) -> Review:
     path = _resolve(str(tool_input.get("file_path", "")), cwd)
     args = {"path": _project_relative(path, cwd)}
     base = review_tool_call("read_file", json.dumps(args), labels, settings)
     target = _shown_path(path, cwd)
     if base.decision == "block":
         return Review(base, target)
-    found = scan_path(path, settings) if os.path.exists(path) else set()
+    found = scan_path(path, settings, index) if os.path.exists(path) else set()
     if not found:
         return Review(_named(base), target)
     verdict = _sensitive_read(path, cwd, found, base.reasons)
@@ -126,24 +154,78 @@ def _review_read(tool_input: dict, cwd: str, labels: set[str], settings: Setting
     return Review(verdict, target, found, path if can_summarize else None)
 
 
-def _review_grep(tool_input: dict, cwd: str, labels: set[str], settings: Settings) -> Review:
+def _review_grep(
+    tool_input: dict, cwd: str, labels: set[str], settings: Settings, index: ScanIndex | None
+) -> Review:
     path = _resolve(str(tool_input.get("path") or "."), cwd)
     target = _shown_path(path, cwd)
     args = {"path": _project_relative(path, cwd)}
-    # Not search_files, which refuses ".": here the root is known and scan_path bounds the walk.
+    # Not search_files, which refuses ".": here the root is known and scan_folder bounds the walk.
     base = review_tool_call("read_file", json.dumps(args), labels, settings)
     if base.decision != "allow":
         return Review(_named(base), target)
-    found = scan_path(path, settings) if os.path.exists(path) else set()
-    if not found:
+    scan = scan_folder(path, settings, index) if os.path.exists(path) else FolderScan()
+    if not scan.labels:
         return Review(base, target)
-    return Review(_sensitive_read(path, cwd, found, []), target, found)
+    verdict = _sensitive_read(path, cwd, scan.labels, [])
+    if not os.path.isdir(path):
+        return Review(verdict, target, scan.labels)
+    verdict.title = "Claude Code wants to search a folder with sensitive files"
+    verdict.facts.append(("Sensitive files", f"{scan.sensitive:,} of {scan.total:,}"))
+    if scan.unreadable:
+        verdict.facts.append(("Couldn't check", f"{scan.unreadable:,}"))
+    search = None
+    if scan.clean and isinstance(tool_input.get("pattern"), str):
+        verdict.reasons.append("Keep on my Mac searches only the files that passed the check")
+        search = CleanSearch(
+            tool_input["pattern"], scan.clean, scan.total - len(scan.clean),
+            os.path.realpath(cwd), bool(tool_input.get("-i")),
+        )
+    return Review(verdict, target, scan.labels, clean_search=search)
 
 
-def _review_bash(tool_input: dict, cwd: str, labels: set[str], settings: Settings) -> Review:
+def _recursive_search(command: object) -> dict | None:
+    """Return Grep-style input for a plain `grep -r` or `rg` command, or None for anything else.
+
+    Only a single command with known flags qualifies, since each extra feature, such as
+    `grep -f` or following symlinks with -R, reaches files the folder scan never looked at.
+    """
+    if not isinstance(command, str) or re.search(r"[$`\n\\]", command):
+        return None
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    if len(tokens) < 2 or tokens[0] not in _SEARCH_FLAGS or any(set(t) <= set("();<>|&") for t in tokens):
+        return None
+    flags = [t for t in tokens[1:] if t.startswith("-")]
+    operands = [t for t in tokens[1:] if not t.startswith("-")]
+    letters = "".join(flag[1:] for flag in flags)
+    if any(flag.startswith("--") or flag == "-" for flag in flags) or not set(letters) <= _SEARCH_FLAGS[tokens[0]]:
+        return None
+    if (tokens[0] == "grep" and "r" not in letters) or not 1 <= len(operands) <= 2:
+        return None
+    # Quoting is gone from these tokens, so a wildcard must be visibly quoted in the raw command:
+    # unquoted, the shell would expand it into paths this check never sees.
+    pattern_is_quoted = f"'{operands[0]}'" in command or f'"{operands[0]}"' in command
+    if _SHELL_EXPANSION.search(operands[0]) and not pattern_is_quoted:
+        return None
+    if len(operands) == 2 and _SHELL_EXPANSION.search(operands[1]):
+        return None
+    return {"pattern": operands[0], "path": operands[1] if len(operands) == 2 else ".", "-i": "i" in letters}
+
+
+def _review_bash(
+    tool_input: dict, cwd: str, labels: set[str], settings: Settings, index: ScanIndex | None
+) -> Review:
     command = tool_input.get("command")
     if command in _READ_ONLY_GIT:
         return Review(Verdict("allow"), display(command))
+    search = _recursive_search(command)
+    if search is not None and os.path.exists(_resolve(search["path"], cwd)):
+        return _review_grep(search, cwd, labels, settings, index)
     shown = display(command)
     base = review_tool_call("shell", json.dumps({"command": command}), labels, settings)
     if base.decision != "allow":
@@ -154,7 +236,7 @@ def _review_bash(tool_input: dict, cwd: str, labels: set[str], settings: Setting
         for arg in argv[1:]:
             path = _resolve(arg, cwd)
             if not arg.startswith("-") and os.path.exists(path):
-                found |= scan_path(path, settings)
+                found |= scan_path(path, settings, index)
         if found:
             verdict = _sensitive_read(cwd, cwd, found, [])
             verdict.facts = [("Command", shown)]
@@ -188,7 +270,9 @@ def _review_write(tool: str, tool_input: dict, cwd: str, settings: Settings) -> 
     return Review(Verdict("allow"), target)
 
 
-def review_claude_code(payload: dict, session_labels: set[str], settings: Settings) -> Review:
+def review_claude_code(
+    payload: dict, session_labels: set[str], settings: Settings, index: ScanIndex | None = None
+) -> Review:
     """Decide one PreToolUse event. Tools not handled here fall through to the shared policy."""
     tool = str(payload.get("tool_name", ""))
     tool_input = payload.get("tool_input")
@@ -199,11 +283,11 @@ def review_claude_code(payload: dict, session_labels: set[str], settings: Settin
     if tool in _NO_DATA_TOOLS:
         return Review(Verdict("allow"), "")
     if tool == "Read":
-        return _review_read(tool_input, cwd, session_labels, settings)
+        return _review_read(tool_input, cwd, session_labels, settings, index)
     if tool == "Grep":
-        return _review_grep(tool_input, cwd, session_labels, settings)
+        return _review_grep(tool_input, cwd, session_labels, settings, index)
     if tool == "Bash":
-        return _review_bash(tool_input, cwd, session_labels, settings)
+        return _review_bash(tool_input, cwd, session_labels, settings, index)
     if tool in _WRITE_TOOLS:
         return _review_write(tool, tool_input, cwd, settings)
     if tool == "WebFetch":

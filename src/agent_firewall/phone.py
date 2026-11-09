@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from .config import Settings
+from .scanner import Scanner
 from .store import Store
 
 _STATIC = Path(__file__).parent / "static"
@@ -26,7 +27,7 @@ class Decision(BaseModel):
     decision: str
 
 
-def create_phone_app(settings: Settings, store: Store) -> FastAPI:
+def create_phone_app(settings: Settings, store: Store, scanner: Scanner | None = None) -> FastAPI:
     app = FastAPI(title="Agent Firewall phone")
 
     def require_token(t: str = Query(default="")) -> None:
@@ -64,6 +65,9 @@ def create_phone_app(settings: Settings, store: Store) -> FastAPI:
 
     @app.get("/api/stats", dependencies=[Depends(require_token)])
     def stats() -> dict:
-        return {"counters": dict(store.counters), "events": list(store.events)[-50:][::-1]}
+        return {
+            "counters": dict(store.counters), "events": list(store.events)[-50:][::-1],
+            "scan": scanner.status() if scanner else None,
+        }
 
     return app

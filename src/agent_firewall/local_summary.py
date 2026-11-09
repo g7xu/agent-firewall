@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 
 import httpx
 
 from .config import Settings
+from .extract import extract_text
 from .policy import classify
 
 MAX_FILE_CHARS = 20_000
@@ -28,8 +30,11 @@ async def summarize(path: str, settings: Settings, client: httpx.AsyncClient) ->
     The model can be tricked by the file it reads, so its output is rescanned here
     and discarded whole on any match rather than redacted.
     """
+    extracted = await asyncio.to_thread(extract_text, Path(path))
+    if not extracted.text:
+        return None
+    text = extracted.text[:MAX_FILE_CHARS]
     try:
-        text = Path(path).read_text(encoding="utf-8")[:MAX_FILE_CHARS]
         response = await client.post(
             f"{settings.local_base_url}/chat/completions",
             json={
@@ -42,10 +47,18 @@ async def summarize(path: str, settings: Settings, client: httpx.AsyncClient) ->
         )
         response.raise_for_status()
         content = response.json()["choices"][0]["message"]["content"] or ""
-    except (OSError, UnicodeDecodeError, httpx.HTTPError, KeyError, IndexError, TypeError, ValueError):
+    except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError):
         return None
     summary = _THINKING.sub("", content).strip()
     has_identifier = _LONG_NUMBER.search(_ISO_DATE.sub("", summary))
-    if not summary or classify(summary, settings.canaries) or has_identifier:
+    # "A lab report" is the useful answer, but "A1C 7.9" is the data itself.
+    names_topic = classify(summary, settings.canaries)
+    leaks_value = classify(summary, settings.canaries, exact_only=True) or (
+        names_topic and re.search(r"\d", summary)
+    )
+    if not summary or leaks_value or has_identifier:
         return None
-    return summary[:MAX_SUMMARY_CHARS]
+    summary = summary[:MAX_SUMMARY_CHARS]
+    if extracted.partial or len(extracted.text) > MAX_FILE_CHARS:
+        return f"{summary} (Based on only part of the file, so totals may be incomplete.)"
+    return summary

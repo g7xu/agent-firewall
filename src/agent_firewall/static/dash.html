@@ -53,6 +53,18 @@ async function refresh() {
     tile.append(el("div", "num", String(data.counters[key] || 0)), el("div", "label", label));
     return tile;
   }));
+  if (data.scan) {
+    const scanTiles = [
+      [data.scan.checked, data.scan.scanning ? `Files checked (${data.scan.pending.toLocaleString()} to go)` : "Files checked"],
+      [data.scan.sensitive, "Sensitive files found"],
+      [data.scan.unreadable, "Couldn't read"],
+    ];
+    tiles.append(...scanTiles.map(([value, label]) => {
+      const tile = el("div", "tile", "");
+      tile.append(el("div", "num", value.toLocaleString()), el("div", "label", label));
+      return tile;
+    }));
+  }
   const events = document.getElementById("events");
   events.replaceChildren(...data.events.map((event) => {
     const [state, why] = describe(event);

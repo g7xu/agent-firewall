@@ -30,6 +30,12 @@ Every popup shows a fixed sentence for its kind of action. A small local model m
 
 The local model reads the sensitive file, so that file can trick it into repeating what it should hide. Its summary is scanned again and discarded whole on any match. Redacting instead would leave a partly trusted sentence in front of the cloud model.
 
+## How sensitive files are found with no setup
+
+A background scan reads each folder on this machine and saves one result per file, so a popup can answer instantly. Quick text files go first, then PDFs and images, using poppler for text and Apple's on-device Vision framework for OCR. Results are checked against each file's size and modification time, and a changed file is read again.
+
+A file the scan can't judge takes on the character of its folder when several of its neighbors are sensitive, so a blurry scan among tax returns counts as financial. Errors lean toward an extra popup. Paths are stored only as hashes, because a list of where private files live is sensitive in itself.
+
 ## Why labels instead of content matching
 
 Once a session has read protected data it stays labeled. Scanning outbound content alone misses paraphrases and encodings, while the label survives them.
@@ -54,7 +60,10 @@ This list records known gaps, including ones found by adversarial testing. Recog
 
 **Scale**
 
-- **Folders over 500 files.** A search scans at most 500 files, then asks because it can't vouch for the rest. There is no way yet to approve a whole folder, so bulk work means one popup per sensitive file.
+- **Not yet scanned.** A search reads at most 500 files that have no saved result, then asks because it can't vouch for the rest.
+- **No watching for new files between scans.** A changed file is caught when an agent opens it, but folder totals can lag until the next start.
+- **Pictures without words.** OCR reads text only, so a photo with no text counts as clean unless its folder is sensitive.
+- **PDFs mixing text pages and scanned pages.** Only the text pages are read. OCR stops after 10 pages and marks the file as partly unread.
 
 **Reach**
 
