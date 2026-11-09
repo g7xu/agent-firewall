@@ -16,7 +16,7 @@ from pathlib import Path
 from .clean_search import CleanSearch
 from .config import Settings
 from .inspector import inspect_file
-from .policy import Verdict, _folded, _names_secret, display, review_tool_call
+from .policy import Verdict, _folded, _names_secret, display, inspectable_text, review_tool_call
 from .scan_index import ScanIndex
 
 MAX_SCAN_FILES = 500
@@ -24,7 +24,7 @@ MAX_WALK_FILES = 200_000
 _SKIP_DIRS = {".git", ".venv", "node_modules", "__pycache__"}
 # Writes here need a person: `.git/config` alone can make the auto-allowed `git status` run a command.
 _EXECUTABLE_CONFIG = re.compile(
-    r"(^|/)(\.(claude|codex|muse|git|vscode|idea)(/|$)|\.(envrc|gitattributes|gitmodules)$)"
+    r"(^|/)(\.(claude|codex|muse|git|vscode|idea|agent-firewall)(/|$)|\.(envrc|gitattributes|gitmodules)$)"
 )
 
 # Metadata-only tools: they reveal no file contents and take no outside action.
@@ -259,7 +259,8 @@ def _review_write(tool: str, tool_input: dict, cwd: str, settings: Settings) -> 
             target,
         )
     # Folded because default macOS volumes treat .GIT and .git as the same directory.
-    if _EXECUTABLE_CONFIG.search(_folded(path)):
+    firewall_files = {os.path.realpath(os.path.expanduser(p)) for p in (settings.audit_path, settings.policy_path) if p}
+    if _EXECUTABLE_CONFIG.search(_folded(path)) or path in firewall_files:
         return Review(
             Verdict("ask", "Claude Code wants to change settings that can run code", [("File", target)],
                     ["These settings can run commands or turn off this firewall"]),
@@ -284,6 +285,12 @@ def review_claude_code(
     cwd = str(payload.get("cwd") or os.getcwd())
     settings = replace(settings, agent_workdir=os.path.realpath(cwd))
 
+    if any(canary in text for text in inspectable_text(tool_input) for canary in settings.canaries):
+        return Review(
+            Verdict("block", "Blocked: Claude Code tried to use a protected secret",
+                    [("Tool", display(tool))], ["A planted secret appeared in this action"]),
+            display(tool),
+        )
     if tool in _NO_DATA_TOOLS:
         return Review(Verdict("allow"), "")
     if tool == "Read":

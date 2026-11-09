@@ -9,12 +9,14 @@ from __future__ import annotations
 import os
 import queue
 import threading
+import time
 from pathlib import Path
 
 from .config import Settings
-from .inspector import inspect_file
+from .inspector import Inspection, inspect_file
 from .scan_index import ScanIndex
 
+MAX_FLAGGED_FILES = 50_000
 _SKIP_DIRECTORIES = {"node_modules", "__pycache__", "Library", "venv"}
 _SLOW_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".heic", ".heif", ".tif", ".tiff", ".gif", ".bmp", ".webp"}
 
@@ -28,6 +30,12 @@ class Scanner:
         self._lock = threading.Lock()
         self._pending = 0
         self._running = False
+        self._flagged: dict[str, tuple[list[str], str, float]] = {}
+
+    def flagged_files(self) -> list[tuple[str, list[str], str, float]]:
+        """Return flagged files by name. Kept in memory only: the saved index holds no paths."""
+        with self._lock:
+            return [(path, *details) for path, details in self._flagged.items()]
 
     def add_root(self, path: str) -> None:
         """Queue a folder once. Safe to call on every agent action."""
@@ -59,6 +67,17 @@ class Scanner:
                 with self._lock:
                     self._running = False
 
+    def _remember(self, path: Path, result: Inspection | None) -> None:
+        with self._lock:
+            key = str(path)
+            if result is None or not result.labels:
+                self._flagged.pop(key, None)
+            elif key in self._flagged or len(self._flagged) < MAX_FLAGGED_FILES:
+                labels = sorted(result.labels)
+                previous = self._flagged.get(key)
+                found_at = previous[2] if previous and previous[0] == labels else time.time()
+                self._flagged[key] = (labels, result.method, found_at)
+
     def scan(self, root: str) -> None:
         quick, slow = [], []
         for current, directories, files in os.walk(root):
@@ -71,7 +90,7 @@ class Scanner:
             self._pending += len(quick) + len(slow)
         for path in quick + slow:
             try:
-                inspect_file(path, self._settings, self._index)
+                self._remember(path, inspect_file(path, self._settings, self._index))
             finally:
                 with self._lock:
                     self._pending -= 1

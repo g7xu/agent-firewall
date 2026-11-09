@@ -16,7 +16,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .config import Settings
-from .policy import classify, inspectable_text, preview, review_tool_call
+from .custom_policy import PolicyBook, searchable_text
+from .policy import MAX_REVIEWABLE_CHARS, Verdict, classify, display, inspectable_text, preview, review_tool_call
 from .store import Store
 from .worst_case import ai_worst_case, fixed_worst_case
 
@@ -130,7 +131,8 @@ def _as_sse(data: dict) -> StreamingResponse:
 
 
 def create_proxy_app(
-    settings: Settings, store: Store, transport: httpx.AsyncBaseTransport | None = None
+    settings: Settings, store: Store, transport: httpx.AsyncBaseTransport | None = None,
+    policy: PolicyBook | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Agent Firewall proxy")
     client = httpx.AsyncClient(timeout=UPSTREAM_TIMEOUT_SECONDS, transport=transport)
@@ -163,8 +165,24 @@ def create_proxy_app(
             raw_arguments = json.dumps(raw_arguments)
         sha256 = _request_hash(session, name, raw_arguments)
         verdict = review_tool_call(name, raw_arguments, store.session_labels[session], settings)
+        if policy:
+            verdict = policy.apply(
+                verdict, searchable_text(name, raw_arguments), "Agent",
+                [("Tool", display(name)), ("Details", display(raw_arguments))],
+            )
+            if verdict.decision == "ask" and any(len(value) > MAX_REVIEWABLE_CHARS for _, value in verdict.facts):
+                verdict = Verdict(
+                    "block", "Blocked: action too long to show in full", [("Tool", display(name))],
+                    ["This action is too long to review on a popup"],
+                )
+        shown = dict(verdict.facts)
+        target = shown.get("Destination") or shown.get("To") or shown.get("File") or name
+        labels = sorted(classify(raw_arguments, settings.canaries))
         store.counters[f"tool_{verdict.decision}"] += 1
-        store.record("tool", session=session, tool=name, decision=verdict.decision, sha256=sha256)
+        store.record(
+            "tool", session=session, tool=name, decision=verdict.decision, sha256=sha256,
+            target=target, labels=labels, reasons=verdict.reasons,
+        )
 
         if verdict.decision == "allow":
             return None
@@ -181,7 +199,10 @@ def create_proxy_app(
         )
         status = await store.wait(approval)
         store.counters[f"approval_{status}"] += 1
-        store.record("approval", session=session, tool=name, status=status, sha256=sha256)
+        store.record(
+            "approval", session=session, tool=name, status=status, sha256=sha256,
+            target=target, labels=labels, reasons=verdict.reasons,
+        )
         return None if status == "approved" else f"{verdict.title} ({status})"
 
     def record_block(session: str, why: str) -> None:

@@ -32,6 +32,7 @@ class Settings:
     worst_case_model: str = ""
     scan_roots: tuple[str, ...] = ()
     index_path: str = ""
+    policy_path: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -57,4 +58,5 @@ class Settings:
             worst_case_model=os.environ.get("WORST_CASE_MODEL", ""),
             scan_roots=_csv("SCAN_ROOTS", "~/Documents,~/Desktop,~/Downloads"),
             index_path=os.environ.get("INDEX_PATH", "~/.agent-firewall/index.sqlite"),
+            policy_path=os.environ.get("POLICY_PATH", "~/.agent-firewall/policy.json"),
         )

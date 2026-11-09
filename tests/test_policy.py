@@ -427,3 +427,14 @@ def test_approval_card_shows_the_whole_action(name, args, hidden):
 ])
 def test_action_too_long_to_show_in_full_is_blocked(name, args):
     assert review_tool_call(name, json.dumps(args), set(), SETTINGS).decision == "block"
+
+
+@pytest.mark.parametrize("url", ["http://127.0.0.1:8788/api/policy?t=x", "http://localhost:8787/hook/claude-code"])
+def test_allowing_localhost_never_opens_the_firewall_itself(url):
+    settings = Settings(allowed_hosts=("127.0.0.1", "localhost"))
+    assert review_tool_call("http_get", json.dumps({"url": url}), set(), settings).decision == "ask"
+
+
+def test_other_local_ports_stay_allowed():
+    settings = Settings(allowed_hosts=("127.0.0.1",))
+    assert review_tool_call("http_get", json.dumps({"url": "http://127.0.0.1:3000/"}), set(), settings).decision == "allow"

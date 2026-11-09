@@ -3,83 +3,489 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Firewall Dashboard</title>
+<title>Agent Firewall</title>
 <style>
-  :root { --bg:#0f1115; --card:#1a1e26; --text:#f2f4f8; --muted:#9aa3b2; --local:#2ecc71; --cloud:#4da3ff; --bad:#ff5a5f; --warn:#ffb020; }
-  body { margin:0; padding:24px 16px; background:var(--bg); color:var(--text); font:15px/1.4 -apple-system,system-ui,sans-serif; }
-  h1 { font-size:22px; margin:0 0 16px; }
-  #tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:12px; margin-bottom:20px; }
-  .tile { background:var(--card); border-radius:12px; padding:14px; }
-  .num { font-size:30px; font-weight:700; }
-  .label { color:var(--muted); font-size:13px; }
-  .row { display:grid; grid-template-columns:70px 90px 1fr; gap:8px; padding:9px 0; border-bottom:1px solid #2a303b; }
-  .time { color:var(--muted); }
-  .why { word-break:break-word; }
+  :root {
+    --night: #15112e;
+    --dusk: #1f1944;
+    --haze: #2d2660;
+    --text: #f4f0ff;
+    --muted: #b6afd8;
+    --local: #62e4b4;
+    --cloud: #92ccff;
+    --denied: #ff808b;
+    --sensitive: #ffcb5e;
+    --unsure: #cdaeff;
+    --display: "Avenir Next", Avenir, "Helvetica Neue", system-ui, sans-serif;
+    --code: "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--night); }
+  body {
+    margin: 0; min-height: 100vh; color: var(--text); font: 16px/1.5 var(--display);
+    background:
+      radial-gradient(70vw 46vh at 0% 0%, rgba(98,228,180,.13), transparent 70%),
+      radial-gradient(70vw 46vh at 100% 0%, rgba(146,204,255,.15), transparent 70%),
+      var(--night);
+  }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  .page { max-width: 1320px; margin: 0 auto; padding: 22px 28px 64px; }
+
+  .top { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 12px; font-size: 21px; font-weight: 600; letter-spacing: -.01em; }
+  .mark { width: 4px; height: 26px; border-radius: 2px; background: linear-gradient(var(--local), var(--denied) 55%, var(--cloud)); }
+  .checked {
+    display: flex; align-items: baseline; gap: 10px; background: none; border: 0; padding: 6px 2px;
+    border-bottom: 2px solid transparent; text-align: left;
+  }
+  .checked strong { font-size: 30px; font-weight: 500; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .checked span { color: var(--muted); }
+  .checked[aria-pressed="true"] { border-bottom-color: var(--text); }
+  .scan-state { color: var(--muted); font-size: 14px; }
+  .scan-state.busy { color: var(--local); }
+
+  .line {
+    position: relative; display: grid; grid-template-columns: 1fr minmax(340px, 1.1fr) 1fr;
+    margin: 26px 0 34px; min-height: 340px;
+  }
+  .side {
+    display: flex; flex-direction: column; justify-content: flex-end; gap: 4px;
+    background: none; border: 0; padding: 22px 34px; text-align: left; border-radius: 14px;
+    transition: background .18s ease;
+  }
+  .side.right { text-align: right; align-items: flex-end; }
+  .side:hover { background: rgba(255,255,255,.035); }
+  .side[aria-pressed="true"] { background: color-mix(in srgb, var(--tone) 13%, transparent); }
+  .side .num {
+    font-size: clamp(76px, 11vw, 150px); font-weight: 200; line-height: 1; letter-spacing: -.045em;
+    color: var(--tone); font-variant-numeric: tabular-nums;
+  }
+  .side .name { font-size: 24px; font-weight: 500; letter-spacing: -.01em; }
+  .side .note { color: var(--muted); max-width: 30ch; }
+  .local { --tone: var(--local); }
+  .cloud { --tone: var(--cloud); }
+  .denied { --tone: var(--denied); }
+  .sensitive { --tone: var(--sensitive); }
+  .uncertain { --tone: var(--unsure); }
+
+  .gate { position: relative; display: flex; flex-direction: column; justify-content: center; padding: 0 26px; }
+  .gate::before, .gate::after {
+    content: ""; position: absolute; top: 0; bottom: 0; width: 2px; border-radius: 2px;
+    background: linear-gradient(transparent, #fff 18%, #fff 82%, transparent);
+    box-shadow: 0 0 22px 3px rgba(205,174,255,.55);
+    transform-origin: top; animation: raise .9s cubic-bezier(.2,.8,.2,1) both;
+  }
+  .gate::before { left: 0; }
+  .gate::after { right: 0; }
+  @keyframes raise { from { transform: scaleY(0); opacity: 0; } to { transform: scaleY(1); opacity: 1; } }
+  .stop {
+    display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 18px;
+    width: 100%; background: none; border: 0; border-bottom: 1px solid rgba(255,255,255,.12);
+    padding: 18px 16px; text-align: left; transition: background .18s ease;
+  }
+  .stop:last-child { border-bottom: 0; }
+  .stop:hover { background: rgba(255,255,255,.04); }
+  .stop[aria-pressed="true"] { background: color-mix(in srgb, var(--tone) 16%, transparent); }
+  .stop .name { font-size: 21px; font-weight: 500; color: var(--tone); letter-spacing: -.01em; }
+  .stop .note { color: var(--muted); font-size: 14px; grid-column: 1; }
+  .stop .num {
+    grid-column: 2; grid-row: 1 / span 2; font-size: 50px; font-weight: 300; line-height: 1;
+    letter-spacing: -.03em; color: var(--tone); font-variant-numeric: tabular-nums;
+  }
+
+  .work { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 44px; align-items: start; }
+  .list-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+  h2 { margin: 0; font-size: 26px; font-weight: 500; letter-spacing: -.015em; }
+  .count { color: var(--muted); margin-left: 8px; font-size: 16px; }
+  .search {
+    width: min(100%, 300px); background: var(--dusk); border: 1px solid var(--haze);
+    border-radius: 9px; padding: 9px 13px;
+  }
+  .search::placeholder, .compose textarea::placeholder { color: var(--muted); }
+  .rows { margin-top: 12px; }
+  .row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 22px;
+    padding: 14px 0 14px 16px; border-bottom: 1px solid rgba(255,255,255,.09);
+    border-left: 3px solid var(--tone, var(--haze));
+  }
+  .target { font: 14.5px/1.45 var(--code); overflow-wrap: anywhere; }
+  .state { color: var(--tone, var(--muted)); font-weight: 600; text-align: right; white-space: nowrap; }
+  .meta { color: var(--muted); font-size: 14px; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; }
+  .when { color: var(--muted); font-size: 13px; text-align: right; white-space: nowrap; }
+  .tag { border-radius: 5px; padding: 0 7px; font-size: 13px; background: var(--haze); color: var(--text); }
+  .empty { padding: 42px 0; color: var(--muted); max-width: 46ch; }
+  .notice { margin-top: 18px; padding: 14px 16px; border-left: 3px solid var(--denied); background: var(--dusk); }
+
+  aside { display: flex; flex-direction: column; gap: 34px; position: sticky; top: 18px; }
+  .compose form { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .modes { display: grid; grid-template-columns: repeat(3, 1fr); background: var(--dusk); border-radius: 10px; padding: 3px; }
+  .modes button { background: none; border: 0; border-radius: 8px; padding: 8px 4px; color: var(--muted); }
+  .modes button[aria-pressed="true"] { background: var(--haze); color: var(--text); font-weight: 600; }
+  textarea { width: 100%; min-height: 86px; resize: vertical; background: var(--dusk); border: 1px solid var(--haze); border-radius: 10px; padding: 11px 13px; }
+  .hint { color: var(--muted); font-size: 14px; margin: 0; }
+  .submit {
+    align-self: flex-start; border: 0; border-radius: 9px; padding: 9px 18px; font-weight: 600;
+    color: var(--night); background: linear-gradient(95deg, var(--local), var(--cloud));
+  }
+  .feedback { font-size: 14px; color: var(--local); min-height: 21px; margin: 0; }
+  .feedback.bad { color: var(--denied); }
+
+  .policy h3 { margin: 18px 0 6px; font-size: 16px; font-weight: 600; }
+  .entry { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.08); }
+  .entry .text { overflow-wrap: anywhere; }
+  .entry.solo { grid-template-columns: minmax(0, 1fr) auto; }
+  .kind-block { color: var(--denied); font-weight: 600; font-size: 14px; }
+  .kind-ask { color: var(--sensitive); font-weight: 600; font-size: 14px; }
+  .remove { background: none; border: 0; color: var(--muted); font-size: 14px; padding: 0; text-decoration: underline; }
+  .none { color: var(--muted); font-size: 14px; margin: 0; }
+  details { border-bottom: 1px solid rgba(255,255,255,.08); padding: 8px 0; }
+  summary { cursor: pointer; font-weight: 500; }
+  details ul { margin: 8px 0 4px; padding-left: 18px; color: var(--muted); font-size: 14.5px; }
+  details li { margin: 3px 0; }
+  dl { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 16px; font-size: 14.5px; }
+  dt { color: var(--muted); }
+  dd { margin: 0; overflow-wrap: anywhere; }
+
+  @media (max-width: 1000px) {
+    .work { grid-template-columns: minmax(0, 1fr); }
+    aside { position: static; }
+  }
+  @media (max-width: 800px) {
+    .page { padding: 16px 16px 48px; }
+    .line { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+    .side, .side.right { text-align: left; align-items: flex-start; padding: 16px; }
+    .side .num { font-size: 76px; }
+    .gate { padding: 8px 4px; margin: 6px 0; }
+    .gate::before, .gate::after { left: 0; right: 0; width: auto; height: 2px; bottom: auto; background: linear-gradient(90deg, transparent, #fff 18%, #fff 82%, transparent); transform-origin: left; animation: none; }
+    .gate::after { top: auto; bottom: 0; }
+    .row { grid-template-columns: minmax(0, 1fr); }
+    .state, .when { text-align: left; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
 </style>
 </head>
 <body>
-<h1>Where the agent ran, and why</h1>
-<div id="tiles"></div>
-<div id="events"></div>
+<div class="page">
+  <header class="top">
+    <div class="brand"><span class="mark" aria-hidden="true"></span>Agent Firewall</div>
+    <div id="scan" class="scan-state" role="status"></div>
+    <button class="checked" data-category="all" aria-pressed="false">
+      <strong id="n-checked">0</strong><span id="checked-detail">checked</span>
+    </button>
+  </header>
+
+  <section class="line" aria-label="Where agent activity ended up">
+    <button class="side local" data-category="local" aria-pressed="false">
+      <span class="num" id="n-local">0</span>
+      <span class="name">On this device</span>
+      <span class="note">The file stayed here. At most a short summary or clean search results reached the agent.</span>
+    </button>
+    <div class="gate">
+      <button class="stop denied" data-category="denied" aria-pressed="false">
+        <span class="name">Denied</span><span class="num" id="n-denied">0</span>
+        <span class="note">Stopped by you or by a rule.</span>
+      </button>
+      <button class="stop sensitive" data-category="sensitive" aria-pressed="false">
+        <span class="name">Sensitive</span><span class="num" id="n-sensitive">0</span>
+        <span class="note">Financial, health, identity data or credentials.</span>
+      </button>
+      <button class="stop uncertain" data-category="uncertain" aria-pressed="false">
+        <span class="name">Unreadable or unsure</span><span class="num" id="n-uncertain">0</span>
+        <span class="note">The firewall couldn't read it or tell what it does.</span>
+      </button>
+    </div>
+    <button class="side right cloud" data-category="cloud" aria-pressed="false">
+      <span class="num" id="n-cloud">0</span>
+      <span class="name">Sent to the cloud</span>
+      <span class="note">Data allowed through to a cloud AI model.</span>
+    </button>
+  </section>
+
+  <div id="problem" class="notice" hidden></div>
+
+  <div class="work">
+    <section>
+      <div class="list-head">
+        <h2><span id="list-title">Flagged files and agent actions</span><span class="count" id="list-count"></span></h2>
+        <input id="search" class="search" type="search" placeholder="Search files, commands, agents" aria-label="Search this list">
+      </div>
+      <div id="rows" class="rows"></div>
+    </section>
+
+    <aside>
+      <section class="compose">
+        <h2>Add an idea or rule</h2>
+        <form id="form">
+          <div class="modes" role="group" aria-label="What are you adding?">
+            <button type="button" data-kind="idea" aria-pressed="true">Idea</button>
+            <button type="button" data-kind="ask" aria-pressed="false">Always ask</button>
+            <button type="button" data-kind="block" aria-pressed="false">Block</button>
+          </div>
+          <textarea id="text" maxlength="500" aria-label="Your idea or rule text"></textarea>
+          <p id="hint" class="hint"></p>
+          <button id="save" class="submit" type="submit"></button>
+          <p id="feedback" class="feedback" role="status"></p>
+        </form>
+      </section>
+
+      <section class="policy">
+        <h2>Current policy</h2>
+        <h3>Your rules</h3><div id="rules"></div>
+        <h3>Your ideas</h3><div id="ideas"></div>
+        <h3>Built in</h3><div id="built-in"></div>
+        <h3>Settings</h3><dl id="settings"></dl>
+      </section>
+    </aside>
+  </div>
+</div>
+
 <script>
 const token = new URLSearchParams(location.search).get("t") || "";
-const TILES = [
-  ["route_local", "Stayed on device"], ["route_cloud", "Went to cloud"],
-  ["tool_allow", "Actions allowed"], ["tool_ask", "Asked you"],
-  ["tool_block", "Blocked outright"], ["approval_denied", "You denied"],
-];
-const COLORS = { local:"var(--local)", cloud:"var(--cloud)", block:"var(--bad)", denied:"var(--bad)", expired:"var(--bad)", ask:"var(--warn)", approved:"var(--local)", allow:"var(--muted)" };
+const $ = (id) => document.getElementById(id);
+const CATEGORIES = ["local", "denied", "sensitive", "uncertain", "cloud"];
+const TITLES = {
+  all: "Flagged files and agent actions", local: "On this device", denied: "Denied",
+  sensitive: "Sensitive", uncertain: "Unreadable or unsure", cloud: "Sent to the cloud",
+};
+const EMPTY = {
+  all: "No agent actions or flagged files yet. Clean files don't appear here, but they still count toward the total.",
+  local: "Nothing has been handled on this device yet. Choose Keep on my Mac on a popup to see it here.",
+  denied: "Nothing has been denied yet. Actions you deny or rules block will appear here.",
+  sensitive: "No sensitive files or actions found so far.",
+  uncertain: "Everything so far could be read and understood.",
+  cloud: "Nothing has been sent to a cloud model yet.",
+};
+const STATES = {
+  denied: ["Denied", "denied"], expired: ["No answer, denied", "denied"], block: ["Blocked", "denied"],
+  kept_local: ["Kept on device", "local"], local: ["On device", "local"],
+  approved: ["Allowed by you", "cloud"], allow: ["Allowed", "cloud"], cloud: ["Cloud", "cloud"],
+  ask: ["Waiting for you", "sensitive"], unanswered: ["Never answered", ""], file: ["Found in scan", ""],
+};
+const LABELS = {
+  financial: "Financial", health: "Health", identity: "Identity", credentials: "Credentials",
+  canary: "Bait secret", opaque: "Unreadable", inferred: "Sensitive folder",
+};
+const METHODS = {
+  text: "Text file", pdf_text: "PDF", pdf_ocr: "Scanned PDF", pdf_unreadable: "PDF", image_ocr: "Image",
+  image_no_text: "Image", image_unreadable: "Image", office: "Office file", office_unreadable: "Office file",
+  binary: "Binary file", too_large: "Very large file", cloud_placeholder: "Not downloaded", unreadable: "File", model: "Model request",
+};
+const MODES = {
+  idea: { placeholder: "Write down an idea for the firewall", hint: "Saved here for later. It doesn't change what the firewall does.", save: "Save idea", done: "Idea saved." },
+  ask: { placeholder: "Text to watch for, such as paypal.com", hint: "Any action that mentions this text will ask you first.", save: "Add rule", done: "Rule added. It applies from the next action." },
+  block: { placeholder: "Text to stop, such as paypal.com", hint: "Any action that mentions this text will be stopped with no popup.", save: "Add rule", done: "Rule added. It applies from the next action." },
+};
 
-function el(tag, className, text, color) {
+let category = "all";
+let mode = "idea";
+let lastRows = "";
+let firstCounts = true;
+
+function el(tag, className, text) {
   const node = document.createElement(tag);
-  node.className = className;
-  node.textContent = text;
-  if (color) node.style.color = color;
+  if (className) node.className = className;
+  // textContent only: file names and commands can be attacker-controlled.
+  if (text !== undefined) node.textContent = text;
   return node;
 }
 
-function describe(event) {
-  if (event.kind === "route") return [event.route, event.why];
-  if (event.kind === "tool") return [event.decision, event.tool || event.why || ""];
-  return [event.status, event.tool || ""];
+async function api(path, options) {
+  const separator = path.includes("?") ? "&" : "?";
+  const response = await fetch(`${path}${separator}t=${encodeURIComponent(token)}`, options);
+  if (response.status === 403) {
+    showProblem("This page needs the full link printed by the firewall, opened on the Mac it's running on.");
+    throw new Error("forbidden");
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `The firewall answered with error ${response.status}.`);
+  }
+  showProblem("");
+  return response.json();
 }
 
-async function refresh() {
-  let data;
-  try { data = await (await fetch(`/api/stats?t=${encodeURIComponent(token)}`)).json(); } catch { return; }
-  const tiles = document.getElementById("tiles");
-  tiles.replaceChildren(...TILES.map(([key, label]) => {
-    const tile = el("div", "tile", "");
-    tile.append(el("div", "num", String(data.counters[key] || 0)), el("div", "label", label));
-    return tile;
-  }));
-  if (data.scan) {
-    const scanTiles = [
-      [data.scan.checked, data.scan.scanning ? `Files checked (${data.scan.pending.toLocaleString()} to go)` : "Files checked"],
-      [data.scan.sensitive, "Sensitive files found"],
-      [data.scan.unreadable, "Couldn't read"],
-    ];
-    tiles.append(...scanTiles.map(([value, label]) => {
-      const tile = el("div", "tile", "");
-      tile.append(el("div", "num", value.toLocaleString()), el("div", "label", label));
-      return tile;
-    }));
+function showProblem(message) {
+  $("problem").hidden = !message;
+  $("problem").textContent = message;
+}
+
+function setCount(id, value) {
+  const node = $(id);
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!firstCounts || reduced || value === 0) { node.textContent = value.toLocaleString(); return; }
+  const started = performance.now();
+  const step = (now) => {
+    const progress = Math.min((now - started) / 800, 1);
+    node.textContent = Math.round(value * (1 - Math.pow(1 - progress, 3))).toLocaleString();
+    if (progress < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+async function refreshOverview() {
+  const { counts, scan, activity } = await api("/api/overview");
+  CATEGORIES.forEach((name) => setCount(`n-${name}`, counts[name]));
+  const files = scan ? scan.checked : 0;
+  // A server started before this field existed reports only the combined list size.
+  const actions = activity === undefined ? counts.all : activity;
+  setCount("n-checked", files + actions);
+  firstCounts = false;
+  $("checked-detail").textContent = checkedDetail(files, actions);
+  const status = $("scan");
+  status.classList.toggle("busy", Boolean(scan && scan.scanning));
+  status.textContent = !scan ? "File scan is off"
+    : scan.scanning ? `Scanning, ${scan.pending.toLocaleString()} files to go` : "Scan finished";
+}
+
+function checkedDetail(files, actions) {
+  const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
+  return `checked: ${plural(files, "file")} and ${plural(actions, "agent action")}`;
+}
+
+function formatTime(seconds) {
+  if (!seconds) return "";
+  const date = new Date(seconds * 1000);
+  const sameDay = date.toDateString() === new Date().toDateString();
+  return sameDay ? date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+    : date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function renderRow(item) {
+  const [stateText, tone] = STATES[item.state] || [item.state, ""];
+  const row = el("div", `row ${tone}`);
+  if (!tone && item.labels.some((label) => label !== "opaque")) row.classList.add("sensitive");
+  else if (!tone && item.labels.includes("opaque")) row.classList.add("uncertain");
+  row.append(el("div", "target", item.target || item.tool || "(no details)"), el("div", "state", stateText));
+  const meta = el("div", "meta");
+  const who = item.agent === "scanner" ? "File scan" : item.agent === "claude-code" ? "Claude Code" : "Agent";
+  meta.append(el("span", "", `${who}, ${METHODS[item.tool] || item.tool}`));
+  item.labels.forEach((label) => meta.append(el("span", "tag", LABELS[label] || label)));
+  if (item.reasons && item.reasons[0]) meta.append(el("span", "", item.reasons[0]));
+  row.append(meta, el("div", "when", formatTime(item.ts)));
+  return row;
+}
+
+async function refreshRows() {
+  const query = $("search").value;
+  const params = new URLSearchParams({ category, q: query });
+  const data = await api(`/api/items?${params}`);
+  const signature = JSON.stringify([category, query, data]);
+  if (signature === lastRows) return;
+  lastRows = signature;
+  $("list-title").textContent = TITLES[category];
+  const shown = data.items.length;
+  $("list-count").textContent = data.total > shown
+    ? `showing newest ${shown.toLocaleString()} of ${data.total.toLocaleString()}` : data.total.toLocaleString();
+  const rows = $("rows");
+  if (!data.items.length) {
+    rows.replaceChildren(el("div", "empty", query ? `Nothing here matches "${query}".` : EMPTY[category]));
+    return;
   }
-  const events = document.getElementById("events");
-  events.replaceChildren(...data.events.map((event) => {
-    const [state, why] = describe(event);
-    const row = el("div", "row", "");
-    row.append(
-      el("div", "time", new Date(event.ts * 1000).toLocaleTimeString([], { hour12:false })),
-      el("div", "", state, COLORS[state]),
-      el("div", "why", why),
-    );
+  rows.replaceChildren(...data.items.map(renderRow));
+}
+
+function renderEntries(container, entries, emptyText, showKind) {
+  if (!entries.length) { container.replaceChildren(el("p", "none", emptyText)); return; }
+  container.replaceChildren(...entries.map((entry) => {
+    const row = el("div", showKind ? "entry" : "entry solo");
+    if (showKind) row.append(el("span", `kind-${entry.kind}`, entry.kind === "block" ? "Block" : "Ask"));
+    row.append(el("span", "text", entry.text));
+    const remove = el("button", "remove", "Delete");
+    remove.type = "button";
+    remove.setAttribute("aria-label", `Delete: ${entry.text}`);
+    remove.onclick = () => deleteEntry(entry.id);
+    row.append(remove);
     return row;
   }));
 }
 
-refresh();
-setInterval(refresh, 1000);
+async function refreshPolicy() {
+  const policy = await api("/api/policy");
+  renderEntries($("rules"), policy.entries.filter((e) => e.kind !== "idea"), "No rules of your own yet.", true);
+  renderEntries($("ideas"), policy.entries.filter((e) => e.kind === "idea"), "No ideas saved yet.", false);
+  $("built-in").replaceChildren(...policy.built_in.map((group) => {
+    const details = el("details");
+    details.append(el("summary", "", `${group.title} (${group.rules.length})`));
+    const list = el("ul");
+    group.rules.forEach((rule) => list.append(el("li", "", rule)));
+    details.append(list);
+    return details;
+  }));
+  const s = policy.settings;
+  const pairs = [
+    ["Popup waits", `${s.approval_timeout_seconds} seconds, then denies`],
+    ["Allowed sites", s.allowed_hosts.join(", ") || "None"],
+    ["Known recipients", s.known_recipients.join(", ") || "None"],
+    ["Bait secrets", String(s.bait_secrets)],
+    ["Folders scanned", s.scan_roots.join(", ") || "Agent projects only"],
+    ["Cloud model for other agents", s.proxy_cloud_configured ? "Connected" : "Not connected"],
+    ["Local model", s.local_model || "Not set"],
+    ["Worst-case model", s.worst_case_model || "Fixed sentences only"],
+  ];
+  $("settings").replaceChildren(...pairs.flatMap(([term, value]) => [el("dt", "", term), el("dd", "", value)]));
+}
+
+async function deleteEntry(id) {
+  try {
+    await api(`/api/policy/entries/${encodeURIComponent(id)}`, { method: "DELETE" });
+    setFeedback("Deleted.", false);
+    await refreshPolicy();
+  } catch (problem) { setFeedback(problem.message, true); }
+}
+
+function setFeedback(message, bad) {
+  $("feedback").textContent = message;
+  $("feedback").classList.toggle("bad", bad);
+}
+
+function setMode(next) {
+  mode = next;
+  document.querySelectorAll("[data-kind]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.kind === mode)));
+  $("text").placeholder = MODES[mode].placeholder;
+  $("hint").textContent = MODES[mode].hint;
+  $("save").textContent = MODES[mode].save;
+}
+
+function setCategory(next) {
+  category = next;
+  document.querySelectorAll("[data-category]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.category === category)));
+  refreshRows().catch(() => {});
+}
+
+document.querySelectorAll("[data-category]").forEach((button) => { button.onclick = () => setCategory(button.dataset.category); });
+document.querySelectorAll("[data-kind]").forEach((button) => { button.onclick = () => setMode(button.dataset.kind); });
+$("search").addEventListener("input", () => refreshRows().catch(() => {}));
+$("form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const text = $("text").value.trim();
+  if (!text) { setFeedback("Type something first.", true); return; }
+  try {
+    await api("/api/policy/entries", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: mode, text }),
+    });
+    $("text").value = "";
+    setFeedback(MODES[mode].done, false);
+    await refreshPolicy();
+  } catch (problem) { setFeedback(problem.message, true); }
+});
+
+setMode("idea");
+setCategory("all");
+const unreachable = "Can't reach the firewall. It may have stopped, so these numbers may be out of date.";
+let policyLoaded = false;
+const poll = () => {
+  Promise.all([refreshOverview(), refreshRows()]).catch((problem) => {
+    if (problem.message !== "forbidden") showProblem(unreachable);
+  });
+  if (!policyLoaded) refreshPolicy().then(() => { policyLoaded = true; }).catch(() => {});
+};
+poll();
+setInterval(poll, 2000);
 </script>
 </body>
 </html>
