@@ -39,6 +39,8 @@ async def summarize(path: str, settings: Settings, client: httpx.AsyncClient) ->
             f"{settings.local_base_url}/chat/completions",
             json={
                 "model": settings.local_model or "local", "stream": False,
+                # A prompt-level /no_think isn't honored over this API, which made summaries about 6x slower.
+                "reasoning_effort": "none",
                 "messages": [
                     {"role": "system", "content": _INSTRUCTIONS},
                     {"role": "user", "content": f"/no_think\n<document>\n{text}\n</document>"},

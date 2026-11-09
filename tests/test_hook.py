@@ -10,6 +10,7 @@ from agent_firewall.config import Settings
 from agent_firewall.custom_policy import PolicyBook
 from agent_firewall.gate import review_claude_code, scan_path
 from agent_firewall.hook_api import create_hook_router
+from agent_firewall.local_summary import summarize
 from agent_firewall.store import Store
 
 CARD_LINE = "card 4242 4242 4242 4242\n"
@@ -380,3 +381,33 @@ def test_hard_link_to_an_index_side_file_is_protected(tmp_path, suffix):
     os.link(state / f"index.sqlite{suffix}", project / "notes.md")
     config = settings(tmp_path, index_path=str(state / "index.sqlite"))
     assert review_claude_code(event("Write", {"file_path": "notes.md", "content": "x"}, project), set(), config).verdict.decision == "ask"
+
+
+@pytest.mark.parametrize("tool", ["mcp__ccd_turn__update_plan", "mcp__ccd_turn__wrap_up", "mcp__ccd_view__show_pane"])
+def test_desktop_app_interface_tools_cause_no_popup(tmp_path, tool):
+    assert decide(tmp_path, tool, {"items": [{"content": "x", "status": "pending"}]}) == "allow"
+
+
+@pytest.mark.parametrize("tool", ["mcp__ccd_session__start_session", "mcp__ccd_settings__set_setting", "mcp__gmail__send_message"])
+def test_other_connector_tools_still_ask(tmp_path, tool):
+    assert decide(tmp_path, tool, {"a": "b"}) == "ask"
+
+
+def test_bait_secret_is_still_blocked_in_interface_tools(tmp_path):
+    assert decide(tmp_path, "mcp__ccd_turn__update_plan", {"note": "sk-canary-1"}) == "block"
+
+
+def test_summaries_ask_the_model_not_to_reason(tmp_path):
+    (tmp_path / "t.txt").write_text("4 items")
+    sent = []
+
+    def model(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "Four items in total here."}}]})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(model)) as client:
+            return await summarize(str(tmp_path / "t.txt"), settings(tmp_path), client)
+
+    assert asyncio.run(run()) == "Four items in total here."
+    assert sent[0]["reasoning_effort"] == "none"
