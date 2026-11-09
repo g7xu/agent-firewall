@@ -6,6 +6,7 @@ contents are already on their way to the model provider.
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import re
@@ -39,8 +40,18 @@ _NO_DATA_TOOLS = {
 }
 _SHELL_EXPANSION = re.compile(r"[*?\[\]{}~]")
 _SEARCH_FLAGS = {"grep": set("rnilHEIcw"), "rg": set("nilHcw")}
+MAX_COMMAND_PATHS = 200
+MAX_GLOB_MATCHES = 200
+MAX_LISTED_FILES = 8
+_PATH_LIKE = re.compile(r"[\w.~/*?\[\]-]*[\w*?\]][\w.~/*?\[\]-]*")
+_GLOB_CHARS = re.compile(r"[*?\[]")
+_COMMAND_SEPARATORS = re.compile(r";|&&|\|\||\||\n")
+_COMMAND_SUBSTITUTION = re.compile(r"\$\(|`|<\(|>\(")
+_AMBIGUOUS_SHELL = re.compile(r"(?<!&)&(?!&)|[<>]")
+# Deliberately absent: date, du and file, whose options can read a list from a file.
+_NAME_ONLY_COMMANDS = {"ls", "pwd", "cd", "echo", "which", "mkdir", "stat", "basename", "dirname"}
+_FOLDER_READING_COMMANDS = re.compile(r"\b(grep|egrep|fgrep|rg|ag|ack|tar|zip|cp|rsync|scp)\b")
 _READ_ONLY_GIT = {"git status", "git status --short", "git branch", "git log --oneline"}
-_FILE_READING_COMMANDS = {"cat", "head", "tail", "grep", "wc"}
 _WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 _LABEL_REASONS = {
     "financial": "Contains financial data",
@@ -192,6 +203,81 @@ def _review_grep(
     return Review(verdict, target, scan.labels, clean_search=search)
 
 
+@dataclass
+class CommandScan:
+    labels: set[str] = field(default_factory=set)
+    sensitive_paths: list[str] = field(default_factory=list)
+
+
+def _only_inspects_names(command: str) -> bool:
+    """True when every step just lists or prints names, so no file contents can come back."""
+    if _COMMAND_SUBSTITUTION.search(command) or _AMBIGUOUS_SHELL.search(command):
+        return False
+    steps = [step.split() for step in _COMMAND_SEPARATORS.split(command) if step.strip()]
+    return all(step[0] in _NAME_ONLY_COMMANDS for step in steps if step)
+
+
+def _named_paths(command: str, cwd: str) -> tuple[list[str], bool]:
+    """Return existing paths mentioned anywhere in a command, and whether the list was cut short.
+
+    Matches on the raw text as well as shell words, so a file named inside quotes,
+    `--file=x`, or `python -c "open('x')"` is found the same way as a plain argument.
+    """
+    words = set(_PATH_LIKE.findall(command))
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        words.update(lexer)
+    except ValueError:
+        pass
+    found: dict[str, None] = {}
+    truncated = False
+    for word in words:
+        if word.startswith("-") and "=" not in word:
+            continue
+        pattern = os.path.join(cwd, os.path.expanduser(word))
+        matches = sorted(glob.glob(pattern))[:MAX_GLOB_MATCHES] if _GLOB_CHARS.search(word) else [pattern]
+        for match in matches:
+            if os.path.exists(match):
+                found[os.path.realpath(match)] = None
+        if len(found) > MAX_COMMAND_PATHS:
+            truncated = True
+            break
+    return list(found)[:MAX_COMMAND_PATHS], truncated
+
+
+def _files_in_command(
+    command: str, cwd: str, settings: Settings, index: ScanIndex | None
+) -> CommandScan:
+    """Check every file a shell command names, so combining commands can't hide a read."""
+    scan = CommandScan()
+    if _only_inspects_names(command):
+        return scan
+    paths, truncated = _named_paths(command, cwd)
+    if truncated:
+        scan.labels.add("opaque")
+    searches_folders = bool(_FOLDER_READING_COMMANDS.search(command))
+    real_cwd = os.path.realpath(cwd)
+    for path in paths:
+        if os.path.isdir(path):
+            if not searches_folders:
+                continue
+            inside = path == real_cwd or path.startswith(real_cwd + os.sep)
+            found = scan_path(path, settings, index) if inside else {"opaque"}
+        else:
+            found = scan_path(path, settings, index)
+        scan.labels |= found
+        if found - {"opaque"}:
+            scan.sensitive_paths.append(path)
+    return scan
+
+
+def _listed(paths: list[str], cwd: str) -> str:
+    shown = [_project_relative(path, cwd) for path in paths[:MAX_LISTED_FILES]]
+    extra = len(paths) - len(shown)
+    return ", ".join(shown) + (f", and {extra} more" if extra > 0 else "")
+
+
 def _recursive_search(command: object) -> dict | None:
     """Return Grep-style input for a plain `grep -r` or `rg` command, or None for anything else.
 
@@ -236,20 +322,32 @@ def _review_bash(
         return _review_grep(search, cwd, labels, settings, index)
     shown = display(command)
     base = review_tool_call("shell", json.dumps({"command": command}), labels, settings)
-    if base.decision != "allow":
+    if base.decision == "block" or not isinstance(command, str):
         return Review(_named(base), shown)
-    argv = str(command).split()
-    if argv and argv[0] in _FILE_READING_COMMANDS:
-        found: set[str] = set()
-        for arg in argv[1:]:
-            path = _resolve(arg, cwd)
-            if not arg.startswith("-") and os.path.exists(path):
-                found |= scan_path(path, settings, index)
-        if found:
-            verdict = _sensitive_read(cwd, cwd, found, [])
-            verdict.facts = [("Command", shown)]
-            return Review(verdict, shown, found)
-    return Review(base, shown)
+    scan = _files_in_command(command, cwd, settings, index)
+    if scan.labels - {"opaque"}:
+        verdict = Verdict(
+            "ask", "Claude Code wants to run a command that reads sensitive files",
+            [("Command", shown), ("Files", display(_listed(scan.sensitive_paths, cwd)))],
+            [_LABEL_REASONS[l] for l in sorted(scan.labels) if l in _LABEL_REASONS] + [CLOUD_WARNING],
+        )
+        only_one = len(scan.sensitive_paths) == 1 and "opaque" not in scan.labels
+        return Review(verdict, shown, scan.labels, scan.sensitive_paths[0] if only_one else None)
+    if base.decision == "allow" and "opaque" in scan.labels:
+        return Review(_sensitive_read(cwd, cwd, {"opaque"}, []), shown, {"opaque"})
+    # Shells can reach a file in more ways than any parser can follow (cd, {a,b}, find -exec, xargs),
+    # so a command we can't fully read is warned about based on what its folder holds.
+    if base.decision == "ask" and not _only_inspects_names(command):
+        nearby = scan_folder(cwd, settings, index)
+        if nearby.sensitive:
+            count = f"{nearby.sensitive:,} sensitive file{'' if nearby.sensitive == 1 else 's'}"
+            verdict = Verdict(
+                "ask", "Claude Code wants to run a command that may read sensitive files",
+                [("Command", shown), ("In this folder", count)],
+                [f"The firewall can't rule out that this command reads them", CLOUD_WARNING],
+            )
+            return Review(verdict, shown, nearby.labels - {"opaque"})
+    return Review(_named(base), shown, scan.labels)
 
 
 def _is_firewall_file(path: str, settings: Settings) -> bool:

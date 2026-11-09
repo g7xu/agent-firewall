@@ -69,6 +69,10 @@ This list records known gaps, including ones found by adversarial testing. Recog
 - **Pictures without words.** OCR reads text only, so a photo with no text counts as clean unless its folder is sensitive.
 - **PDFs mixing text pages and scanned pages.** Only the text pages are read. OCR stops after 10 pages and marks the file as partly unread.
 
+**Commands**
+
+- **Files a command reaches indirectly.** The firewall checks every file a command names, but shells can reach a file through `cd`, brace expansion, `find -exec`, loops or the code inside a script. Those commands ask, and warn when the current folder holds sensitive files. A file outside that folder, reached indirectly, gets no data warning.
+
 **Reach**
 
 - **Cloud-hosted agents** that don't use a connector or this proxy, including vendors' consumer agents.
