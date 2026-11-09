@@ -15,10 +15,15 @@ end run"""
 _DECISIONS = {"Allow": "approve", "Deny": "deny", "Keep on my Mac": "keep_local"}
 
 
-def card_text(title: str, facts: list[tuple[str, str]], reasons: list[str], worst_case: str = "") -> str:
+def card_text(
+    title: str, facts: list[tuple[str, str]], reasons: list[str],
+    worst_case: str = "", ai_worst_case: str = "",
+) -> str:
     lines = [title, ""] + [f"{label}: {value}" for label, value in facts] + [""]
     if worst_case:
         lines += [f"Worst case: {worst_case}", ""]
+    if ai_worst_case:
+        lines += [f"AI-written detail, may be wrong: {ai_worst_case}", ""]
     return "\n".join(lines + [f"⚠ {reason}" for reason in reasons])
 
 

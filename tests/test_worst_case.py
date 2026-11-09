@@ -7,13 +7,12 @@ import pytest
 from agent_firewall.config import Settings
 from agent_firewall.policy import Verdict, review_tool_call
 from agent_firewall.popup import card_text
-from agent_firewall.worst_case import describe_worst_case, fixed_worst_case
+from agent_firewall.worst_case import ai_worst_case, fixed_worst_case
 
 MONEY = Verdict(
     "ask", "Claude Code wants to move money",
     [("To account", "11223344"), ("Amount usd", "9800")], ["This action always needs you"],
 )
-FIXED_MONEY = "The money is gone and may not be recoverable."
 
 
 def describe(verdict, reply=None, model="llama3.2:3b", handler=None):
@@ -27,7 +26,7 @@ def describe(verdict, reply=None, model="llama3.2:3b", handler=None):
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler or default)) as client:
-            return await describe_worst_case(verdict, settings, client)
+            return await ai_worst_case(verdict, settings, client)
 
     return asyncio.run(run()), requests
 
@@ -48,7 +47,7 @@ def test_every_action_has_a_fixed_sentence(title, reasons, expected):
 
 def test_no_model_configured_makes_no_call():
     text, requests = describe(MONEY, model="")
-    assert text == FIXED_MONEY and requests == []
+    assert text == "" and requests == []
 
 
 def test_specific_sentence_is_used():
@@ -80,7 +79,7 @@ def test_comma_in_a_known_amount_is_accepted():
 ])
 def test_bad_sentences_fall_back(reply):
     text, _ = describe(MONEY, reply)
-    assert text == FIXED_MONEY
+    assert text == ""
 
 
 @pytest.mark.parametrize("failure", [
@@ -90,14 +89,14 @@ def test_bad_sentences_fall_back(reply):
 ])
 def test_model_errors_fall_back(failure):
     text, _ = describe(MONEY, handler=lambda request: failure)
-    assert text == FIXED_MONEY
+    assert text == ""
 
 
 def test_connection_failure_falls_back():
     def refuse(request):
         raise httpx.ConnectError("down")
     text, _ = describe(MONEY, handler=refuse)
-    assert text == FIXED_MONEY
+    assert text == ""
 
 
 def test_slow_model_misses_the_deadline(monkeypatch):
@@ -108,7 +107,7 @@ def test_slow_model_misses_the_deadline(monkeypatch):
         return httpx.Response(200, json={"choices": [{"message": {"content": "Late sentence about the money."}}]})
 
     text, _ = describe(MONEY, handler=slow)
-    assert text == FIXED_MONEY
+    assert text == ""
 
 
 def test_model_never_sees_message_bodies_or_commands():
@@ -144,13 +143,13 @@ def test_popup_text_shows_worst_case():
 ])
 def test_numbers_must_equal_a_whole_fact(reply):
     text, _ = describe(MONEY, reply)
-    assert text == FIXED_MONEY
+    assert text == ""
 
 
 def test_address_must_equal_a_whole_fact():
     verdict = Verdict("ask", "Agent wants to send an email", [("To", "x@evil.example")], [])
     text, _ = describe(verdict, "A stranger at evil.example now holds this information.")
-    assert text == "Private information reaches a stranger."
+    assert text == ""
 
 
 @pytest.mark.parametrize("label, value", [
@@ -170,3 +169,9 @@ def test_repeated_fields_use_only_the_first():
     _, requests = describe(verdict, "The money may be permanently gone from your savings.")
     sent = json.dumps(requests[0]["messages"])
     assert "111" in sent and "222" not in sent
+
+
+def test_popup_labels_the_model_sentence_and_keeps_the_fixed_one():
+    text = card_text("Title", [], [], "It can't be taken back.", "Your card goes to Anthropic.")
+    assert "Worst case: It can't be taken back." in text
+    assert "AI-written detail, may be wrong: Your card goes to Anthropic." in text

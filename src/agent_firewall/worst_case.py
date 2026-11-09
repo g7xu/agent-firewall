@@ -1,9 +1,9 @@
 """Plain-language worst case for an approval card.
 
-The fixed sentences are the guarantee. A small local model may make one more specific, but it
-receives only facts the rules extracted, never file contents or message bodies, because that
-text can carry an instruction to play the risk down. Its output is thrown away unless it
-passes every check in `_acceptable`.
+The fixed sentence is always shown. A small local model may add a more specific one beside it,
+labeled as AI-written, because no filter can prove a generated sentence doesn't understate the
+risk. The model receives only facts the rules extracted, never file contents or message bodies,
+since that text can carry an instruction to play the risk down.
 """
 
 from __future__ import annotations
@@ -152,19 +152,19 @@ async def _ask_model(prompt: str, settings: Settings, client: httpx.AsyncClient)
     return response.json()["choices"][0]["message"]["content"] or ""
 
 
-async def describe_worst_case(verdict: Verdict, settings: Settings, client: httpx.AsyncClient) -> str:
-    """Return the sentence for the card: the model's if it qualifies in time, otherwise the fixed one."""
-    fixed = fixed_worst_case(verdict)
+async def ai_worst_case(verdict: Verdict, settings: Settings, client: httpx.AsyncClient) -> str:
+    """Return the model's specific sentence, or "" if it didn't qualify in time."""
     if not settings.worst_case_model:
-        return fixed
+        return ""
+    fixed = fixed_worst_case(verdict)
     facts = _usable_facts(verdict)
     prompt = _model_input(verdict, fixed, facts)
     try:
         raw = await asyncio.wait_for(_ask_model(prompt, settings, client), MODEL_DEADLINE_SECONDS)
     except (TimeoutError, httpx.HTTPError, KeyError, IndexError, TypeError, ValueError):
-        return fixed
+        return ""
     text = re.sub(r"^\s*warning:\s*", "", raw.strip(), flags=re.I).strip()
-    return display(text) if _acceptable(text, facts) else fixed
+    return display(text) if _acceptable(text, facts) else ""
 
 
 async def warm_up(settings: Settings, client: httpx.AsyncClient) -> None:

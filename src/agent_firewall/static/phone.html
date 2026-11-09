@@ -71,6 +71,11 @@ function buildCard(item) {
     worst.append(el("div", "label", "Worst case"), el("div", "value", item.worst_case));
     card.append(worst);
   }
+  if (item.ai_worst_case) {
+    const detail = el("div", "fact");
+    detail.append(el("div", "label", "AI-written detail, may be wrong"), el("div", "value", item.ai_worst_case));
+    card.append(detail);
+  }
   for (const reason of item.reasons) card.append(el("div", "reason", "⚠ " + reason));
   const timer = el("div", "timer");
   card.append(timer);

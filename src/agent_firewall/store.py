@@ -31,6 +31,7 @@ class Approval:
     expires_at: float
     can_keep_local: bool = False
     worst_case: str = ""
+    ai_worst_case: str = ""
     status: str = "pending"
     event: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -59,12 +60,13 @@ class Store:
     def create_approval(
         self, session: str, tool: str, title: str, facts: list[tuple[str, str]],
         reasons: list[str], sha256: str, can_keep_local: bool = False, worst_case: str = "",
+        ai_worst_case: str = "",
     ) -> Approval:
         approval = Approval(
             id=f"apr_{secrets.token_hex(6)}",
             session=session, tool=tool, title=title, facts=facts, reasons=reasons, sha256=sha256,
             expires_at=time.time() + self.settings.approval_timeout_seconds,
-            can_keep_local=can_keep_local, worst_case=worst_case,
+            can_keep_local=can_keep_local, worst_case=worst_case, ai_worst_case=ai_worst_case,
         )
         self.approvals[approval.id] = approval
         return approval
