@@ -321,3 +321,15 @@ def test_quoted_regex_patterns_are_still_plain_searches(tmp_path, command):
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "a.md").write_text("hello")
     assert bash(tmp_path, index_at(tmp_path), command).verdict.decision == "allow"
+
+
+def test_symlink_in_a_folder_is_never_clean(tmp_path):
+    secret = tmp_path / "outside_key"
+    secret.write_text("private key material")
+    project = tmp_path / "p"
+    project.mkdir()
+    (project / "notes.md").symlink_to(secret)
+    (project / "real.md").write_text("hello")
+    scan = scan_folder(str(project), SETTINGS, index_at(tmp_path))
+    assert scan.clean == [str(project.resolve() / "real.md")]
+    assert scan.unreadable == 1

@@ -94,6 +94,10 @@ def scan_folder(path: str, settings: Settings, index: ScanIndex | None = None) -
                 scan.labels.add("opaque")
                 return scan
             file = Path(root, name)
+            if file.is_symlink():
+                # A link can point anywhere, so it never counts as clean.
+                record(file, {"opaque"})
+                continue
             if _names_secret(name):
                 # Keys and tokens rarely match the data patterns, so the file name has to count.
                 record(file, {"credentials"})

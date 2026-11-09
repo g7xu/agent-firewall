@@ -8,7 +8,7 @@ When Claude Code tries to open a file with financial or health data, a popup exp
 
 ## Install
 
-Requires macOS, [uv](https://docs.astral.sh/uv/), [Ollama](https://ollama.com) and [Claude Code](https://code.claude.com) 2.1.295 or newer.
+Requires macOS, [uv](https://docs.astral.sh/uv/), [Ollama](https://ollama.com), [poppler](https://poppler.freedesktop.org) (`brew install poppler`) and [Claude Code](https://code.claude.com) 2.1.295 or newer.
 
 ```bash
 git clone git@github.com:g7xu/agent-firewall.git
@@ -26,6 +26,8 @@ Start the firewall and leave it running:
 ```bash
 CLOUD_BASE_URL= LOCAL_BASE_URL=http://127.0.0.1:11434/v1 LOCAL_MODEL=qwen3:14b WORST_CASE_MODEL=llama3.2:3b uv run agent-firewall
 ```
+
+On start it scans `~/Documents`, `~/Desktop`, `~/Downloads` and any project an agent works in, entirely on this machine, to find sensitive files without setup. Macs may ask for permission. To scan only agent projects, add `SCAN_ROOTS=` to the front of that command.
 
 In a second terminal, open Claude Code in the demo project, which contains only fake data:
 
