@@ -187,7 +187,7 @@ def _as_list(value: Any) -> list[str]:
 
 
 def _data_flow_warnings(session_labels: set[str]) -> list[str]:
-    readable = sorted(session_labels - {"canary", "opaque"})
+    readable = sorted(session_labels - {"canary", "opaque", "credentials", "inferred"})
     if readable:
         return [f"This session has read {' and '.join(readable)} data"]
     if session_labels:

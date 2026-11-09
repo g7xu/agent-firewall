@@ -24,6 +24,7 @@ _MAX_CHARS = 180
 _GENERIC = "The firewall can't predict this, so it could do something you never intended."
 _FIXED = {
     "read a sensitive file": "This data leaves your Mac and can't be taken back.",
+    "search a folder with sensitive files": "Private data in these files leaves your Mac and can't be taken back.",
     "read a credentials file": "Anyone who gets this file could sign in as you.",
     "move money": "The money is gone and may not be recoverable.",
     "send an email": "Private information reaches a stranger.",

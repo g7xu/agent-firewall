@@ -247,3 +247,14 @@ def test_similar_names_are_not_config(tmp_path):
 @pytest.mark.parametrize("path", [".GIT/config", ".Git/hooks/pre-commit", ".CLAUDE/settings.json", ".ENVRC", ".GitAttributes"])
 def test_config_check_ignores_case_like_macos_does(tmp_path, path):
     assert decide(tmp_path, "Write", {"file_path": path, "content": "x"}) == "ask"
+
+
+@pytest.mark.parametrize("reply, kept", [
+    ("This document is a lab report for one person.", True),
+    ("A lab report showing A1C 7.9 for this person.", False),
+])
+def test_summary_may_name_the_topic_but_not_the_values(tmp_path, reply, kept):
+    result, _, _ = run_hook(tmp_path, "keep_local", local_reply=reply)
+    text = output(result)["permissionDecisionReason"]
+    assert (reply in text) is kept
+    assert "7.9" not in text

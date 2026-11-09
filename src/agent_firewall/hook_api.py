@@ -13,10 +13,13 @@ import json
 import httpx
 from fastapi import APIRouter, Body
 
+from .clean_search import run_clean_search
 from .config import Settings
 from .gate import Review, review_claude_code
 from .local_summary import summarize
 from .popup import ask_on_mac, card_text
+from .scan_index import ScanIndex
+from .scanner import Scanner
 from .store import Approval, Store
 from .worst_case import ai_worst_case, fixed_worst_case
 
@@ -32,7 +35,8 @@ def _decision(permission: str, reason: str) -> dict:
 
 
 def create_hook_router(
-    settings: Settings, store: Store, transport: httpx.AsyncBaseTransport | None = None
+    settings: Settings, store: Store, transport: httpx.AsyncBaseTransport | None = None,
+    index: ScanIndex | None = None, scanner: Scanner | None = None,
 ) -> APIRouter:
     router = APIRouter()
     client = httpx.AsyncClient(timeout=SUMMARY_TIMEOUT_SECONDS, transport=transport)
@@ -57,6 +61,15 @@ def create_hook_router(
                 popup.cancel()
 
     async def keep_local(review: Review) -> dict:
+        if review.clean_search:
+            search = review.clean_search
+            matches = await asyncio.to_thread(run_clean_search, search, settings)
+            return _decision(
+                "deny",
+                f"Agent Firewall searched only the {len(search.files):,} files that passed its check "
+                f"and left out {search.left_out:,}. Do not retry this search. "
+                f"Matches:\n{matches or '(none)'}",
+            )
         summary = await summarize(review.keep_local_path or "", settings, client)
         if summary is None:
             return _decision("deny", "Agent Firewall kept this file on the user's Mac and has no summary to share.")
@@ -70,7 +83,12 @@ def create_hook_router(
     async def claude_code_hook(payload: dict = Body(...)) -> dict:
         session = f"{AGENT}:{payload.get('session_id', 'unknown')}"
         tool = str(payload.get("tool_name", ""))
-        review = review_claude_code(payload, store.session_labels[session], settings)
+        if scanner and payload.get("cwd"):
+            scanner.add_root(str(payload["cwd"]))
+        # Off the event loop: reading a PDF or image can take seconds.
+        review = await asyncio.to_thread(
+            review_claude_code, payload, set(store.session_labels[session]), settings, index
+        )
         verdict = review.verdict
         sha256 = hashlib.sha256(
             json.dumps({"tool": tool, "input": payload.get("tool_input")}, sort_keys=True).encode()
@@ -93,7 +111,7 @@ def create_hook_router(
         log("ask", "rules")
         approval = store.create_approval(
             session, tool, verdict.title, verdict.facts, verdict.reasons, sha256,
-            can_keep_local=review.keep_local_path is not None,
+            can_keep_local=review.keep_local_path is not None or review.clean_search is not None,
             worst_case=fixed_worst_case(verdict),
             ai_worst_case=await ai_worst_case(verdict, settings, client),
         )

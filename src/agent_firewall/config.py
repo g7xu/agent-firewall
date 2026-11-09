@@ -30,6 +30,8 @@ class Settings:
     agent_workdir: str = ""
     popup: str = "off"
     worst_case_model: str = ""
+    scan_roots: tuple[str, ...] = ()
+    index_path: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -53,4 +55,6 @@ class Settings:
             agent_workdir=os.environ.get("AGENT_WORKDIR", ""),
             popup=os.environ.get("POPUP", "mac"),
             worst_case_model=os.environ.get("WORST_CASE_MODEL", ""),
+            scan_roots=_csv("SCAN_ROOTS", "~/Documents,~/Desktop,~/Downloads"),
+            index_path=os.environ.get("INDEX_PATH", "~/.agent-firewall/index.sqlite"),
         )

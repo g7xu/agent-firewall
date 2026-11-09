@@ -34,6 +34,7 @@ def describe(verdict, reply=None, model="llama3.2:3b", handler=None):
 @pytest.mark.parametrize("title, reasons, expected", [
     ("Claude Code wants to read a sensitive file", [], "leaves your Mac"),
     ("Agent wants to move money", [], "may not be recoverable"),
+    ("Claude Code wants to search a folder with sensitive files", [], "leaves your Mac"),
     ("Agent wants to send an email", [], "stranger"),
     ("Agent wants to delete something", [], "gone for good"),
     ("Agent wants to run a command", ["This command runs code it pipes in"], "runs as you"),

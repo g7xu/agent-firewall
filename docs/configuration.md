@@ -20,3 +20,5 @@ Settings are read from `.env` in the directory where the firewall starts.
 | `AGENT_WORKDIR` | No | empty | The agent's working directory on this machine. Set it to hold relative paths that symlinks carry outside it. |
 | `POPUP` | No | `mac` | `mac` shows a native dialog for Claude Code actions; any other value uses only the phone page. |
 | `WORST_CASE_MODEL` | No | empty | Local model that adds a specific, labeled sentence under the fixed worst-case warning, served from `LOCAL_BASE_URL`. It has 3 seconds to answer. Empty shows only the fixed sentence. |
+| `SCAN_ROOTS` | No | `~/Documents,~/Desktop,~/Downloads` | Folders scanned in the background. Each project an agent works in is added automatically. Empty scans only those projects. |
+| `INDEX_PATH` | No | `~/.agent-firewall/index.sqlite` | Saved scan results, holding hashed paths and labels only. Empty turns off the background scan. |
