@@ -57,6 +57,7 @@ Those results use a scripted model that always falls for the attack, so they tes
 - [How-to guides](docs/how-to.md): protect your own project, approve from your phone, connect another agent
 - [Configuration reference](docs/configuration.md)
 - [Design and limits](docs/design.md)
+- [UI/UX summary](docs/ui-ux-summary.md): the four surfaces, the design language, and the core flows
 
 ## Contributing
 
